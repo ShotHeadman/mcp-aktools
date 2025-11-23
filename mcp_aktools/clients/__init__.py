@@ -1,3 +1,6 @@
 """API 客户端模块。"""
 
-# 此模块将包含 API 客户端实现
+from .base import BaseAPIClient
+from .akshare import AkShareClient
+
+__all__ = ["BaseAPIClient", "AkShareClient"]
