@@ -1,3 +1,3 @@
-"""Data models and type definitions module."""
+"""数据模型和类型定义模块。"""
 
-# This module will contain TypedDict definitions and data schemas
+# 此模块将包含 TypedDict 定义和数据模式

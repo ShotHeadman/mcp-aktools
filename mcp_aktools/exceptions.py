@@ -1,20 +1,20 @@
-"""Custom exception classes for MCP AkTools."""
+"""MCP AkTools 的自定义异常类。"""
 
 from typing import Optional
 
 
 class MCPAkToolsException(Exception):
-    """Base exception class for all MCP AkTools exceptions."""
+    """所有 MCP AkTools 异常的基类。"""
     pass
 
 
 class APIException(MCPAkToolsException):
-    """Exception raised when an external API call fails.
+    """外部 API 调用失败时抛出的异常。
     
     Attributes:
-        api_name: Name of the API that failed
-        message: Error message describing the failure
-        status_code: HTTP status code if applicable
+        api_name: 失败的 API 名称
+        message: 描述失败的错误消息
+        status_code: HTTP 状态码（如果适用）
     """
     
     def __init__(
@@ -23,129 +23,129 @@ class APIException(MCPAkToolsException):
         message: str,
         status_code: Optional[int] = None
     ):
-        """Initialize APIException.
+        """初始化 APIException。
         
         Args:
-            api_name: Name of the API that failed
-            message: Error message describing the failure
-            status_code: HTTP status code if applicable
+            api_name: 失败的 API 名称
+            message: 描述失败的错误消息
+            status_code: HTTP 状态码（如果适用）
         """
         self.api_name = api_name
         self.message = message
         self.status_code = status_code
         
-        error_msg = f"{api_name} API Error: {message}"
+        error_msg = f"{api_name} API 错误: {message}"
         if status_code is not None:
-            error_msg += f" (Status: {status_code})"
+            error_msg += f" (状态: {status_code})"
         
         super().__init__(error_msg)
 
 
 class DataParsingException(MCPAkToolsException):
-    """Exception raised when data parsing fails.
+    """数据解析失败时抛出的异常。
     
     Attributes:
-        source: Source of the data that failed to parse
-        message: Error message describing the parsing failure
+        source: 解析失败的数据源
+        message: 描述解析失败的错误消息
     """
     
     def __init__(self, source: str, message: str):
-        """Initialize DataParsingException.
+        """初始化 DataParsingException。
         
         Args:
-            source: Source of the data that failed to parse
-            message: Error message describing the parsing failure
+            source: 解析失败的数据源
+            message: 描述解析失败的错误消息
         """
         self.source = source
         self.message = message
-        super().__init__(f"Data parsing error from {source}: {message}")
+        super().__init__(f"来自 {source} 的数据解析错误: {message}")
 
 
 class ValidationException(MCPAkToolsException):
-    """Exception raised when parameter validation fails.
+    """参数验证失败时抛出的异常。
     
     Attributes:
-        param_name: Name of the parameter that failed validation
-        message: Error message describing the validation failure
+        param_name: 验证失败的参数名称
+        message: 描述验证失败的错误消息
     """
     
     def __init__(self, param_name: str, message: str):
-        """Initialize ValidationException.
+        """初始化 ValidationException。
         
         Args:
-            param_name: Name of the parameter that failed validation
-            message: Error message describing the validation failure
+            param_name: 验证失败的参数名称
+            message: 描述验证失败的错误消息
         """
         self.param_name = param_name
         self.message = message
-        super().__init__(f"Validation error for '{param_name}': {message}")
+        super().__init__(f"'{param_name}' 的验证错误: {message}")
 
 
 class RateLimitException(MCPAkToolsException):
-    """Exception raised when API rate limit is exceeded.
+    """API 速率限制被超过时抛出的异常。
     
     Attributes:
-        api_name: Name of the API that rate limited the request
-        retry_after: Number of seconds to wait before retrying (if provided by API)
+        api_name: 限制请求的 API 名称
+        retry_after: 重试前需要等待的秒数（如果 API 提供）
     """
     
     def __init__(self, api_name: str, retry_after: Optional[int] = None):
-        """Initialize RateLimitException.
+        """初始化 RateLimitException。
         
         Args:
-            api_name: Name of the API that rate limited the request
-            retry_after: Number of seconds to wait before retrying
+            api_name: 限制请求的 API 名称
+            retry_after: 重试前需要等待的秒数
         """
         self.api_name = api_name
         self.retry_after = retry_after
         
-        msg = f"Rate limit exceeded for {api_name}"
+        msg = f"{api_name} 的速率限制已超过"
         if retry_after is not None:
-            msg += f", retry after {retry_after} seconds"
+            msg += f"，请在 {retry_after} 秒后重试"
         
         super().__init__(msg)
 
 
 class RetryExhaustedException(MCPAkToolsException):
-    """Exception raised when retry attempts are exhausted.
+    """重试尝试用尽时抛出的异常。
     
     Attributes:
-        operation: Name of the operation that failed
-        attempts: Number of retry attempts made
+        operation: 失败的操作名称
+        attempts: 进行的重试尝试次数
     """
     
     def __init__(self, operation: str, attempts: int):
-        """Initialize RetryExhaustedException.
+        """初始化 RetryExhaustedException。
         
         Args:
-            operation: Name of the operation that failed
-            attempts: Number of retry attempts made
+            operation: 失败的操作名称
+            attempts: 进行的重试尝试次数
         """
         self.operation = operation
         self.attempts = attempts
         super().__init__(
-            f"Retry exhausted for {operation} after {attempts} attempts"
+            f"{operation} 的重试在 {attempts} 次尝试后已用尽"
         )
 
 
 class CacheException(MCPAkToolsException):
-    """Exception raised when cache operations fail.
+    """缓存操作失败时抛出的异常。
     
-    This exception is typically logged but not raised to avoid
-    disrupting normal operations since cache is for performance optimization.
+    此异常通常被记录但不抛出，以避免
+    中断正常操作，因为缓存用于性能优化。
     
     Attributes:
-        operation: Cache operation that failed (get, set, delete, etc.)
-        message: Error message describing the failure
+        operation: 失败的缓存操作（get、set、delete 等）
+        message: 描述失败的错误消息
     """
     
     def __init__(self, operation: str, message: str):
-        """Initialize CacheException.
+        """初始化 CacheException。
         
         Args:
-            operation: Cache operation that failed
-            message: Error message describing the failure
+            operation: 失败的缓存操作
+            message: 描述失败的错误消息
         """
         self.operation = operation
         self.message = message
-        super().__init__(f"Cache {operation} failed: {message}")
+        super().__init__(f"缓存 {operation} 失败: {message}")

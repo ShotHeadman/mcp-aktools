@@ -1,3 +1,3 @@
-"""API client module."""
+"""API 客户端模块。"""
 
-# This module will contain API client implementations
+# 此模块将包含 API 客户端实现

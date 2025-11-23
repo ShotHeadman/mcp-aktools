@@ -579,14 +579,14 @@ def ak_cache(fun, *args, **kwargs) -> pd.DataFrame | None:
     return all
 
 def add_technical_indicators(df, clos, lows, high):
-    # 计算MACD指标
+    # 计算 MACD 指标
     ema12 = clos.ewm(span=12, adjust=False).mean()
     ema26 = clos.ewm(span=26, adjust=False).mean()
     df["DIF"] = ema12 - ema26
     df["DEA"] = df["DIF"].ewm(span=9, adjust=False).mean()
     df["MACD"] = (df["DIF"] - df["DEA"]) * 2
 
-    # 计算KDJ指标
+    # 计算 KDJ 指标
     low_min  = lows.rolling(window=9, min_periods=1).min()
     high_max = high.rolling(window=9, min_periods=1).max()
     rsv = (clos - low_min) / (high_max - low_min) * 100
@@ -594,7 +594,7 @@ def add_technical_indicators(df, clos, lows, high):
     df["KDJ.D"] = df["KDJ.K"].ewm(com=2, adjust=False).mean()
     df["KDJ.J"] = 3 * df["KDJ.K"] - 2 * df["KDJ.D"]
 
-    # 计算RSI指标
+    # 计算 RSI 指标
     delta = clos.diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
@@ -613,10 +613,10 @@ def add_technical_indicators(df, clos, lows, high):
 def main():
     mode = os.getenv("TRANSPORT")
     port = int(os.getenv("PORT", 0)) or 80
-    parser = argparse.ArgumentParser(description="AkTools MCP Server")
-    parser.add_argument("--http", action="store_true", help="Use streamable HTTP mode instead of stdio")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=port, help=f"Port to listen on (default: {port})")
+    parser = argparse.ArgumentParser(description="AkTools MCP 服务器")
+    parser.add_argument("--http", action="store_true", help="使用可流式 HTTP 模式而不是 stdio")
+    parser.add_argument("--host", default="0.0.0.0", help="绑定的主机（默认：0.0.0.0）")
+    parser.add_argument("--port", type=int, default=port, help=f"监听的端口（默认：{port}）")
 
     args = parser.parse_args()
     if args.http or mode == "http":

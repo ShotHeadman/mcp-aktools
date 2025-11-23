@@ -1,24 +1,24 @@
-"""Cache management module.
+"""缓存管理模块。
 
-This package will contain the new cache manager and strategy implementations.
-For backward compatibility, we re-export CacheKey from the legacy cache.py module.
+此包将包含新的缓存管理器和策略实现。
+为了向后兼容，我们从旧的 cache.py 模块重新导出 CacheKey。
 """
 
-# The issue is that there's both mcp_aktools/cache.py and mcp_aktools/cache/ directory
-# Python's import system prioritizes the package (directory) over the module (file)
-# So we need to explicitly import from the parent package's cache module
+# 问题是既有 mcp_aktools/cache.py 又有 mcp_aktools/cache/ 目录
+# Python 的导入系统优先考虑包（目录）而不是模块（文件）
+# 所以我们需要显式地从父包的缓存模块导入
 
-# Import CacheKey from the legacy cache.py file for backward compatibility
-# We use __import__ with fromlist to get the actual module, not the package
+# 从旧的 cache.py 文件导入 CacheKey 以实现向后兼容
+# 我们使用 __import__ 和 fromlist 来获取实际的模块，而不是包
 import sys
 cache_module = sys.modules.get('mcp_aktools.cache')
 if cache_module and hasattr(cache_module, 'CacheKey'):
-    # If already imported, use it
+    # 如果已导入，使用它
     CacheKey = cache_module.CacheKey
 else:
-    # Otherwise, we need to import it differently
-    # Since this __init__.py IS mcp_aktools.cache, we can't import from ourselves
-    # We need to import the .py file directly
+    # 否则，我们需要以不同的方式导入
+    # 由于这个 __init__.py 就是 mcp_aktools.cache，我们不能从自己导入
+    # 我们需要直接导入 .py 文件
     import importlib.util
     from pathlib import Path
     
@@ -29,7 +29,7 @@ else:
         spec.loader.exec_module(legacy_cache)
         CacheKey = legacy_cache.CacheKey
     else:
-        # Fallback if import fails
+        # 如果导入失败则回退
         CacheKey = None
 
 __all__ = ["CacheKey"]

@@ -1,4 +1,4 @@
-"""Utility functions module."""
+"""工具函数模块。"""
 
 from .validators import Validators
 from .rate_limiter import RateLimiter

@@ -1,7 +1,7 @@
-"""Parameter validation utilities for MCP AkTools.
+"""MCP AkTools 的参数验证工具。
 
-This module provides validators for common parameter types used across
-the MCP AkTools API, including market types, periods, limits, dates, and symbols.
+此模块为 MCP AkTools API 中使用的常见参数类型提供验证器，
+包括市场类型、周期、限制、日期和符号。
 """
 
 import re
@@ -11,19 +11,18 @@ from ..exceptions import ValidationException
 
 
 class Validators:
-    """Collection of parameter validation methods.
+    """参数验证方法集合。
     
-    This class provides static methods for validating various parameter types
-    used in stock and cryptocurrency data queries.
+    此类提供用于验证股票和加密货币数据查询中使用的各种参数类型的静态方法。
     """
     
-    # Valid market types
+    # 有效的市场类型
     VALID_MARKETS: List[str] = ["sh", "sz", "hk", "us"]
     
-    # Valid period types for stock data
+    # 股票数据的有效周期类型
     VALID_PERIODS: List[str] = ["daily", "weekly"]
     
-    # Valid bar/candlestick intervals for cryptocurrency data
+    # 加密货币数据的有效K线/蜡烛图间隔
     VALID_CRYPTO_BARS: List[str] = [
         "1m", "3m", "5m", "15m", "30m",
         "1H", "2H", "4H", "6H", "12H",
@@ -31,21 +30,21 @@ class Validators:
         "1W", "1M", "3M"
     ]
     
-    # Date format pattern (YYYYMMDD)
+    # 日期格式模式 (YYYYMMDD)
     DATE_PATTERN = re.compile(r"^\d{8}$")
     
     @staticmethod
     def validate_market(market: str) -> str:
-        """Validate market parameter.
+        """验证市场参数。
         
         Args:
-            market: Market identifier to validate
+            market: 要验证的市场标识符
             
         Returns:
-            The validated market string
+            验证后的市场字符串
             
         Raises:
-            ValidationException: If market is not in VALID_MARKETS
+            ValidationException: 如果市场不在 VALID_MARKETS 中
             
         Examples:
             >>> Validators.validate_market("sh")
@@ -56,22 +55,22 @@ class Validators:
         if market not in Validators.VALID_MARKETS:
             raise ValidationException(
                 "market",
-                f"Must be one of {Validators.VALID_MARKETS}, got '{market}'"
+                f"必须是 {Validators.VALID_MARKETS} 中的一个，得到 '{market}'"
             )
         return market
     
     @staticmethod
     def validate_period(period: str) -> str:
-        """Validate period parameter.
+        """验证周期参数。
         
         Args:
-            period: Period identifier to validate
+            period: 要验证的周期标识符
             
         Returns:
-            The validated period string
+            验证后的周期字符串
             
         Raises:
-            ValidationException: If period is not in VALID_PERIODS
+            ValidationException: 如果周期不在 VALID_PERIODS 中
             
         Examples:
             >>> Validators.validate_period("daily")
@@ -82,22 +81,22 @@ class Validators:
         if period not in Validators.VALID_PERIODS:
             raise ValidationException(
                 "period",
-                f"Must be one of {Validators.VALID_PERIODS}, got '{period}'"
+                f"必须是 {Validators.VALID_PERIODS} 中的一个，得到 '{period}'"
             )
         return period
     
     @staticmethod
     def validate_crypto_bar(bar: str) -> str:
-        """Validate cryptocurrency bar/candlestick interval parameter.
+        """验证加密货币K线/蜡烛图间隔参数。
         
         Args:
-            bar: Bar interval to validate
+            bar: 要验证的K线间隔
             
         Returns:
-            The validated bar string
+            验证后的K线间隔字符串
             
         Raises:
-            ValidationException: If bar is not in VALID_CRYPTO_BARS
+            ValidationException: 如果K线间隔不在 VALID_CRYPTO_BARS 中
             
         Examples:
             >>> Validators.validate_crypto_bar("1H")
@@ -108,7 +107,7 @@ class Validators:
         if bar not in Validators.VALID_CRYPTO_BARS:
             raise ValidationException(
                 "bar",
-                f"Must be one of {Validators.VALID_CRYPTO_BARS}, got '{bar}'"
+                f"必须是 {Validators.VALID_CRYPTO_BARS} 中的一个，得到 '{bar}'"
             )
         return bar
     
@@ -118,18 +117,18 @@ class Validators:
         min_val: int = 1,
         max_val: int = 300
     ) -> int:
-        """Validate limit parameter for result count restrictions.
+        """验证结果数量限制参数。
         
         Args:
-            limit: Number of results to limit to
-            min_val: Minimum allowed value (default: 1)
-            max_val: Maximum allowed value (default: 300)
+            limit: 要限制的结果数量
+            min_val: 允许的最小值（默认：1）
+            max_val: 允许的最大值（默认：300）
             
         Returns:
-            The validated limit integer
+            验证后的限制整数
             
         Raises:
-            ValidationException: If limit is outside the allowed range
+            ValidationException: 如果限制超出允许范围
             
         Examples:
             >>> Validators.validate_limit(50)
@@ -140,22 +139,22 @@ class Validators:
         if not min_val <= limit <= max_val:
             raise ValidationException(
                 "limit",
-                f"Must be between {min_val} and {max_val}, got {limit}"
+                f"必须在 {min_val} 和 {max_val} 之间，得到 {limit}"
             )
         return limit
     
     @staticmethod
     def validate_date(date: str) -> str:
-        """Validate date format (YYYYMMDD).
+        """验证日期格式 (YYYYMMDD)。
         
         Args:
-            date: Date string to validate
+            date: 要验证的日期字符串
             
         Returns:
-            The validated date string
+            验证后的日期字符串
             
         Raises:
-            ValidationException: If date doesn't match YYYYMMDD format
+            ValidationException: 如果日期不符合 YYYYMMDD 格式
             
         Examples:
             >>> Validators.validate_date("20240101")
@@ -166,22 +165,22 @@ class Validators:
         if not Validators.DATE_PATTERN.match(date):
             raise ValidationException(
                 "date",
-                f"Must be in YYYYMMDD format, got '{date}'"
+                f"必须为 YYYYMMDD 格式，得到 '{date}'"
             )
         return date
     
     @staticmethod
     def validate_symbol(symbol: str) -> str:
-        """Validate stock/crypto symbol parameter.
+        """验证股票/加密货币符号参数。
         
         Args:
-            symbol: Symbol string to validate
+            symbol: 要验证的符号字符串
             
         Returns:
-            The validated and trimmed symbol string
+            验证后并去除空格的符号字符串
             
         Raises:
-            ValidationException: If symbol is empty or contains only whitespace
+            ValidationException: 如果符号为空或仅包含空格
             
         Examples:
             >>> Validators.validate_symbol("AAPL")
@@ -194,6 +193,6 @@ class Validators:
         if not symbol or not symbol.strip():
             raise ValidationException(
                 "symbol",
-                "Symbol cannot be empty"
+                "符号不能为空"
             )
         return symbol.strip()

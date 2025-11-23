@@ -1,3 +1,3 @@
-"""MCP tool functions module."""
+"""MCP 工具函数模块。"""
 
-# This module will contain all MCP tool functions organized by domain
+# 此模块将包含按领域组织的所有 MCP 工具函数

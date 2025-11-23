@@ -1,7 +1,6 @@
-"""Cache strategy definitions for MCP AkTools.
+"""MCP AkTools 的缓存策略定义。
 
-This module defines cache strategies and TTL configurations for different
-types of data.
+此模块定义了不同类型数据的缓存策略和 TTL 配置。
 """
 
 from typing import Dict
@@ -9,87 +8,87 @@ from enum import Enum
 
 
 class CacheStrategy(Enum):
-    """Cache strategy types."""
+    """缓存策略类型。"""
     
-    # Stock data strategies
+    # 股票数据策略
     STOCK_INFO = "stock_info"
     STOCK_PRICES = "stock_prices"
     STOCK_INDICATORS = "stock_indicators"
     
-    # Crypto data strategies
+    # 加密货币数据策略
     CRYPTO_PRICES = "crypto_prices"
     CRYPTO_RATIOS = "crypto_ratios"
     CRYPTO_VOLUME = "crypto_volume"
     
-    # Market data strategies
+    # 市场数据策略
     MARKET_DATA = "market_data"
     MARKET_POOL = "market_pool"
     
-    # News strategies
+    # 新闻策略
     NEWS = "news"
     
-    # Default strategy
+    # 默认策略
     DEFAULT = "default"
 
 
 class CacheStrategyConfig:
-    """Configuration for cache strategies.
+    """缓存策略配置。
     
-    This class defines TTL values and other cache parameters for different
-    types of data. Values can be overridden by configuration.
+    此类定义了不同类型数据的 TTL 值和其他缓存参数。
+    这些值可以通过配置进行覆盖。
     """
     
-    # Default TTL values (in seconds)
-    DEFAULT_MEMORY_TTL = 600  # 10 minutes
-    DEFAULT_DISK_TTL = 1200   # 20 minutes
+    # 默认 TTL 值（单位：秒）
+    DEFAULT_MEMORY_TTL = 600  # 10 分钟
+    DEFAULT_DISK_TTL = 1200   # 20 分钟
     
-    # Strategy-specific TTL values
+    # 特定策略的 TTL 值
     STRATEGY_TTL: Dict[CacheStrategy, tuple[int, int]] = {
-        # (memory_ttl, disk_ttl)
-        CacheStrategy.STOCK_INFO: (300, 600),      # 5 min / 10 min
-        CacheStrategy.STOCK_PRICES: (600, 1800),   # 10 min / 30 min
-        CacheStrategy.STOCK_INDICATORS: (600, 1800),  # 10 min / 30 min
-        CacheStrategy.CRYPTO_PRICES: (60, 300),    # 1 min / 5 min
-        CacheStrategy.CRYPTO_RATIOS: (300, 600),   # 5 min / 10 min
-        CacheStrategy.CRYPTO_VOLUME: (300, 600),   # 5 min / 10 min
-        CacheStrategy.MARKET_DATA: (600, 1200),    # 10 min / 20 min
-        CacheStrategy.MARKET_POOL: (300, 600),     # 5 min / 10 min
-        CacheStrategy.NEWS: (600, 1800),           # 10 min / 30 min
+        # (内存TTL, 磁盘TTL)
+        CacheStrategy.STOCK_INFO: (300, 600),      # 5分钟 / 10分钟
+        CacheStrategy.STOCK_PRICES: (600, 1800),   # 10分钟 / 30分钟
+        CacheStrategy.STOCK_INDICATORS: (600, 1800),  # 10分钟 / 30分钟
+        CacheStrategy.CRYPTO_PRICES: (60, 300),    # 1分钟 / 5分钟
+        CacheStrategy.CRYPTO_RATIOS: (300, 600),   # 5分钟 / 10分钟
+        CacheStrategy.CRYPTO_VOLUME: (300, 600),   # 5分钟 / 10分钟
+        CacheStrategy.MARKET_DATA: (600, 1200),    # 10分钟 / 20分钟
+        CacheStrategy.MARKET_POOL: (300, 600),     # 5分钟 / 10分钟
+        CacheStrategy.NEWS: (600, 1800),           # 10分钟 / 30分钟
         CacheStrategy.DEFAULT: (DEFAULT_MEMORY_TTL, DEFAULT_DISK_TTL),
     }
     
     @classmethod
     def get_ttl(cls, strategy: CacheStrategy) -> tuple[int, int]:
-        """Get TTL values for a cache strategy.
+        """获取缓存策略的 TTL 值。
         
         Args:
-            strategy: The cache strategy
+            strategy: 缓存策略
             
         Returns:
-            Tuple of (memory_ttl, disk_ttl) in seconds
+            (内存TTL, 磁盘TTL) 的元组，单位为秒
         """
         return cls.STRATEGY_TTL.get(strategy, cls.STRATEGY_TTL[CacheStrategy.DEFAULT])
     
     @classmethod
     def get_memory_ttl(cls, strategy: CacheStrategy) -> int:
-        """Get memory cache TTL for a strategy.
+        """获取策略的内存缓存 TTL。
         
         Args:
-            strategy: The cache strategy
+            strategy: 缓存策略
             
         Returns:
-            Memory TTL in seconds
+            内存 TTL，单位为秒
         """
         return cls.get_ttl(strategy)[0]
     
     @classmethod
     def get_disk_ttl(cls, strategy: CacheStrategy) -> int:
-        """Get disk cache TTL for a strategy.
+        """获取策略的磁盘缓存 TTL。
         
         Args:
-            strategy: The cache strategy
+            strategy: 缓存策略
             
         Returns:
-            Disk TTL in seconds
+            磁盘 TTL，单位为秒
         """
         return cls.get_ttl(strategy)[1]
