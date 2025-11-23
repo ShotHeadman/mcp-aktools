@@ -10,7 +10,7 @@ from fastmcp import FastMCP
 from pydantic import Field
 from datetime import datetime, timedelta
 from starlette.middleware.cors import CORSMiddleware
-from .cache import CacheKey
+from mcp_aktools.cache import CacheKey
 
 _LOGGER = logging.getLogger(__name__)
 _LOGGER.setLevel(logging.INFO)
