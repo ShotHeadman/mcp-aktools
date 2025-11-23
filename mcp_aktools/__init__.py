@@ -11,9 +11,12 @@ from pydantic import Field
 from datetime import datetime, timedelta
 from starlette.middleware.cors import CORSMiddleware
 from mcp_aktools.cache import CacheKey
+from mcp_aktools.logging_config import setup_logging, get_logger
 
-_LOGGER = logging.getLogger(__name__)
-_LOGGER.setLevel(logging.INFO)
+# 初始化日志系统
+setup_logging()
+
+_LOGGER = get_logger(__name__)
 
 mcp = FastMCP(name="mcp-aktools", version="0.1.13")
 

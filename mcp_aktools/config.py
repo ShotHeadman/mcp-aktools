@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     log_file: Optional[str] = None
+    log_file_max_bytes: int = 10 * 1024 * 1024  # 10 MB
+    log_file_backup_count: int = 5
     
     # API 速率限制配置
     rate_limit_calls: int = 10
