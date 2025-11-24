@@ -30,6 +30,12 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10) AppleWebKit/537.36 Chro
 
 # 导入股票工具模块
 from mcp_aktools.tools import stock as stock_tools
+# 导入加密货币工具模块
+from mcp_aktools.tools import crypto as crypto_tools
+# 导入市场数据工具模块
+from mcp_aktools.tools import market as market_tools
+# 导入新闻工具模块
+from mcp_aktools.tools import news as news_tools
 
 @mcp.tool(
     title="查找股票代码",
@@ -78,39 +84,7 @@ def stock_news(
     symbol: str = Field(description="股票代码/加密货币符号"),
     limit: int = Field(15, description="返回数量(int)", strict=False),
 ):
-    news = list(dict.fromkeys([
-        v["新闻内容"]
-        for v in ak_cache(stock_news_em, symbol=symbol, ttl=3600).to_dict(orient="records")
-        if isinstance(v, dict)
-    ]))
-    if news:
-        return "\n".join(news[0:limit])
-    return f"Not Found for {symbol}"
-
-def stock_news_em(symbol, limit=20):
-    cbk = "jQuery351013927587392975826_1763361926020"
-    resp = requests.get(
-        "http://search-api-web.eastmoney.com/search/jsonp",
-        headers={
-            "User-Agent": USER_AGENT,
-            "Referer": f"https://so.eastmoney.com/news/s?keyword={symbol}",
-        },
-        params={
-            "cb": cbk,
-            "param": '{"uid":"",'
-                     f'"keyword":"{symbol}",'
-                     '"type":["cmsArticleWebOld"],"client":"web","clientType":"web","clientVersion":"curr",'
-                     '"param":{"cmsArticleWebOld":{"searchScope":"default","sort":"default","pageIndex":1,"pageSize":10,'
-                     '"preTag":"<em>","postTag":"</em>"}}}',
-        },
-    )
-    text = resp.text.replace(cbk, "").strip().strip("()")
-    data = json.loads(text) or {}
-    dfs = pd.DataFrame(data.get("result", {}).get("cmsArticleWebOld") or [])
-    dfs.sort_values("date", ascending=False, inplace=True)
-    dfs = dfs.head(limit)
-    dfs["新闻内容"] = dfs["content"].str.replace(r"</?em>", "", regex=True)
-    return dfs
+    return news_tools.stock_news(symbol=symbol, limit=limit)
 
 
 @mcp.tool(
@@ -148,31 +122,7 @@ def stock_indicators_us(
     description="获取当前系统时间及A股交易日信息，建议在调用其他需要日期参数的工具前使用该工具",
 )
 def get_current_time():
-    now = datetime.now()
-    week = "日一二三四五六日"[now.isoweekday()]
-    texts = [f"当前时间: {now.isoformat()}, 星期{week}"]
-    dfs = ak_cache(ak.tool_trade_date_hist_sina, ttl=43200)
-    if dfs is not None:
-        start = now.date() - timedelta(days=5)
-        ended = now.date() + timedelta(days=5)
-        dates = [
-            d.strftime("%Y-%m-%d")
-            for d in dfs["trade_date"]
-            if start <= d <= ended
-        ]
-        texts.append(f", 最近交易日有: {','.join(dates)}")
-    return "".join(texts)
-
-def recent_trade_date():
-    now = datetime.now().date()
-    dfs = ak_cache(ak.tool_trade_date_hist_sina, ttl=43200)
-    if dfs is None:
-        return now
-    dfs.sort_values("trade_date", ascending=False, inplace=True)
-    for d in dfs["trade_date"]:
-        if d <= now:
-            return d
-    return now
+    return market_tools.get_current_time()
 
 
 @mcp.tool(
@@ -183,18 +133,7 @@ def stock_zt_pool_em(
     date: str = Field("", description="交易日日期(可选)，默认为最近的交易日，格式: 20251231"),
     limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
 ):
-    if not date:
-        date = recent_trade_date().strftime("%Y%m%d")
-    dfs = ak_cache(ak.stock_zt_pool_em, date=date, ttl=1200)
-    cnt = len(dfs)
-    try:
-        dfs.drop(columns=["序号", "流通市值", "总市值"], inplace=True)
-    except Exception:
-        pass
-    dfs.sort_values("成交额", ascending=False, inplace=True)
-    dfs = dfs.head(int(limit))
-    desc = f"共{cnt}只涨停股\n"
-    return desc + dfs.to_csv(index=False, float_format="%.2f").strip()
+    return market_tools.stock_zt_pool_em(date=date, limit=limit)
 
 
 @mcp.tool(
@@ -205,16 +144,7 @@ def stock_zt_pool_strong_em(
     date: str = Field("", description="交易日日期(可选)，默认为最近的交易日，格式: 20251231"),
     limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
 ):
-    if not date:
-        date = recent_trade_date().strftime("%Y%m%d")
-    dfs = ak_cache(ak.stock_zt_pool_strong_em, date=date, ttl=1200)
-    try:
-        dfs.drop(columns=["序号", "流通市值", "总市值"], inplace=True)
-    except Exception:
-        pass
-    dfs.sort_values("成交额", ascending=False, inplace=True)
-    dfs = dfs.head(int(limit))
-    return dfs.to_csv(index=False, float_format="%.2f").strip()
+    return market_tools.stock_zt_pool_strong_em(date=date, limit=limit)
 
 
 @mcp.tool(
@@ -225,9 +155,7 @@ def stock_lhb_ggtj_sina(
     days: str = Field("5", description="统计最近天数，仅支持: [5/10/30/60]"),
     limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
 ):
-    dfs = ak_cache(ak.stock_lhb_ggtj_sina, symbol=days, ttl=3600)
-    dfs = dfs.head(int(limit))
-    return dfs.to_csv(index=False, float_format="%.2f").strip()
+    return market_tools.stock_lhb_ggtj_sina(days=days, limit=limit)
 
 
 @mcp.tool(
@@ -238,19 +166,7 @@ def stock_sector_fund_flow_rank(
     days: str = Field("今日", description="天数，仅支持: {'今日','5日','10日'}，如果需要获取今日数据，请确保是交易日"),
     cate: str = Field("行业资金流", description="仅支持: {'行业资金流','概念资金流','地域资金流'}"),
 ):
-    dfs = ak_cache(ak.stock_sector_fund_flow_rank, indicator=days, sector_type=cate, ttl=1200)
-    if dfs is None:
-        return "获取数据失败"
-    try:
-        dfs.sort_values("今日涨跌幅", ascending=False, inplace=True)
-        dfs.drop(columns=["序号"], inplace=True)
-    except Exception:
-        pass
-    try:
-        dfs = pd.concat([dfs.head(20), dfs.tail(20)])
-        return dfs.to_csv(index=False, float_format="%.2f").strip()
-    except Exception as exc:
-        return str(exc)
+    return market_tools.stock_sector_fund_flow_rank(days=days, cate=cate)
 
 
 @mcp.tool(
@@ -258,48 +174,7 @@ def stock_sector_fund_flow_rank(
     description="获取最新的全球财经快讯",
 )
 def stock_news_global():
-    news = []
-    try:
-        dfs = ak.stock_info_global_sina()
-        csv = dfs.to_csv(index=False, float_format="%.2f").strip()
-        csv = csv.replace(datetime.now().strftime("%Y-%m-%d "), "")
-        news.extend(csv.split("\n"))
-    except Exception:
-        pass
-    news.extend(newsnow_news())
-    return "\n".join(news)
-
-
-def newsnow_news(channels=None):
-    base = os.getenv("NEWSNOW_BASE_URL")
-    if not base:
-        return []
-    if not channels:
-        channels = os.getenv("NEWSNOW_CHANNELS") or "wallstreetcn-quick,cls-telegraph,jin10"
-    if isinstance(channels, str):
-        channels = channels.split(",")
-    all = []
-    try:
-        res = requests.post(
-            f"{base}/api/s/entire",
-            json={"sources": channels},
-            headers={
-                "User-Agent": USER_AGENT,
-                "Referer": base,
-            },
-            timeout=60,
-        )
-        lst = res.json() or []
-        for item in lst:
-            for v in item.get("items", [])[0:15]:
-                title = v.get("title", "")
-                extra = v.get("extra") or {}
-                hover = extra.get("hover") or title
-                info = extra.get("info") or ""
-                all.append(f"{hover} {info}".strip().replace("\n", " "))
-    except Exception:
-        pass
-    return all
+    return news_tools.stock_news_global()
 
 
 @mcp.tool(
@@ -311,37 +186,7 @@ def okx_prices(
     bar: str = Field("1H", description="K线时间粒度，仅支持: [1m/3m/5m/15m/30m/1H/2H/4H/6H/12H/1D/2D/3D/1W/1M/3M] 除分钟为小写m外,其余均为大写"),
     limit: int = Field(100, description="返回数量(int)，最大300，最小建议30", strict=False),
 ):
-    if not bar.endswith("m"):
-        bar = bar.upper()
-    res = requests.get(
-        f"{OKX_BASE_URL}/api/v5/market/candles",
-        params={
-            "instId": instId,
-            "bar": bar,
-            "limit": max(300, limit + 62),
-        },
-        timeout=20,
-    )
-    data = res.json() or {}
-    dfs = pd.DataFrame(data.get("data", []))
-    if dfs.empty:
-        return pd.DataFrame()
-    dfs.columns = ["时间", "开盘", "最高", "最低", "收盘", "成交量", "成交额", "成交额USDT", "K线已完结"]
-    dfs.sort_values("时间", inplace=True)
-    dfs["时间"] = pd.to_datetime(dfs["时间"], errors="coerce", unit="ms")
-    dfs["开盘"] = pd.to_numeric(dfs["开盘"], errors="coerce")
-    dfs["最高"] = pd.to_numeric(dfs["最高"], errors="coerce")
-    dfs["最低"] = pd.to_numeric(dfs["最低"], errors="coerce")
-    dfs["收盘"] = pd.to_numeric(dfs["收盘"], errors="coerce")
-    dfs["成交量"] = pd.to_numeric(dfs["成交量"], errors="coerce")
-    dfs["成交额"] = pd.to_numeric(dfs["成交额"], errors="coerce")
-    add_technical_indicators(dfs, dfs["收盘"], dfs["最低"], dfs["最高"])
-    columns = [
-        "时间", "开盘", "收盘", "最高", "最低", "成交量", "成交额",
-        "MACD", "DIF", "DEA", "KDJ.K", "KDJ.D", "KDJ.J", "RSI", "BOLL.U", "BOLL.M", "BOLL.L",
-    ]
-    all = dfs.to_csv(columns=columns, index=False, float_format="%.2f").strip().split("\n")
-    return "\n".join([all[0], *all[-limit:]])
+    return crypto_tools.okx_prices(inst_id=instId, bar=bar, limit=limit)
 
 
 @mcp.tool(
@@ -350,24 +195,9 @@ def okx_prices(
 )
 def okx_loan_ratios(
     symbol: str = Field("BTC", description="币种，格式: BTC 或 ETH"),
-    period: str = Field("1h", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"),
+    period: str = Field("1H", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"),
 ):
-    res = requests.get(
-        f"{OKX_BASE_URL}/api/v5/rubik/stat/margin/loan-ratio",
-        params={
-            "ccy": symbol,
-            "period": period,
-        },
-        timeout=20,
-    )
-    data = res.json() or {}
-    dfs = pd.DataFrame(data.get("data", []))
-    if dfs.empty:
-        return pd.DataFrame()
-    dfs.columns = ["时间", "多空比"]
-    dfs["时间"] = pd.to_datetime(dfs["时间"], errors="coerce", unit="ms")
-    dfs["多空比"] = pd.to_numeric(dfs["多空比"], errors="coerce")
-    return dfs.to_csv(index=False, float_format="%.2f").strip()
+    return crypto_tools.okx_loan_ratios(symbol=symbol, period=period)
 
 
 @mcp.tool(
@@ -376,27 +206,10 @@ def okx_loan_ratios(
 )
 def okx_taker_volume(
     symbol: str = Field("BTC", description="币种，格式: BTC 或 ETH"),
-    period: str = Field("1h", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"),
+    period: str = Field("1H", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"),
     instType: str = Field("SPOT", description="产品类型 SPOT:现货 CONTRACTS:衍生品"),
 ):
-    res = requests.get(
-        f"{OKX_BASE_URL}/api/v5/rubik/stat/taker-volume",
-        params={
-            "ccy": symbol,
-            "period": period,
-            "instType": instType,
-        },
-        timeout=20,
-    )
-    data = res.json() or {}
-    dfs = pd.DataFrame(data.get("data", []))
-    if dfs.empty:
-        return pd.DataFrame()
-    dfs.columns = ["时间", "卖出量", "买入量"]
-    dfs["时间"] = pd.to_datetime(dfs["时间"], errors="coerce", unit="ms")
-    dfs["卖出量"] = pd.to_numeric(dfs["卖出量"], errors="coerce")
-    dfs["买入量"] = pd.to_numeric(dfs["买入量"], errors="coerce")
-    return dfs.to_csv(index=False, float_format="%.2f").strip()
+    return crypto_tools.okx_taker_volume(symbol=symbol, period=period, inst_type=instType)
 
 
 @mcp.tool(
@@ -406,41 +219,7 @@ def okx_taker_volume(
 def binance_ai_report(
     symbol: str = Field("BTC", description="加密货币币种，格式: BTC 或 ETH"),
 ):
-    res = requests.post(
-        f"{BINANCE_BASE_URL}/bapi/bigdata/v3/friendly/bigdata/search/ai-report/report",
-        json={
-            'lang': 'zh-CN',
-            'token': symbol,
-            'symbol': f'{symbol}USDT',
-            'product': 'web-spot',
-            'timestamp': int(time.time() * 1000),
-            'translateToken': None,
-        },
-        headers={
-            'User-Agent': USER_AGENT,
-            'Referer': f'https://www.binance.com/zh-CN/trade/{symbol}_USDT?type=spot',
-            'lang': 'zh-CN',
-        },
-        timeout=20,
-    )
-    try:
-        resp = res.json() or {}
-    except Exception:
-        try:
-            resp = json.loads(res.text.strip()) or {}
-        except Exception:
-            return res.text
-    data = resp.get('data') or {}
-    report = data.get('report') or {}
-    translated = report.get('translated') or report.get('original') or {}
-    modules = translated.get('modules') or []
-    txts = []
-    for module in modules:
-        if tit := module.get('overview'):
-            txts.append(tit)
-        for point in module.get('points', []):
-            txts.append(point.get('content', ''))
-    return '\n'.join(txts)
+    return crypto_tools.binance_ai_report(symbol=symbol)
 
 
 @mcp.tool(
