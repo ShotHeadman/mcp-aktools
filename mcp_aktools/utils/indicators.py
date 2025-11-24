@@ -1,10 +1,14 @@
 """
 技术指标计算模块
 
-使用 pandas-ta 专业技术分析库提供常用的技术指标计算功能，
-包括 MACD、KDJ、RSI、BOLL 等。所有函数都包含完整的类型注解。
+提供常用的技术指标计算功能，包括 MACD、KDJ、RSI、BOLL 等。
+所有函数都包含完整的类型注解。
 
-pandas-ta 是一个专业的技术分析库，提供了 130+ 种技术指标的标准实现。
+所有指标均使用 pandas-ta 专业库计算，确保与主流行情软件保持一致：
+- MACD: 使用 ta.macd() 计算
+- KDJ: 使用 ta.kdj() 计算，采用传统中国市场算法
+- RSI: 使用 ta.rsi() 计算
+- BOLL: 使用 ta.bbands() 计算布林带
 """
 
 from typing import Tuple
@@ -90,7 +94,7 @@ def calculate_kdj(
     """
     计算 KDJ (Stochastic Oscillator) 指标
 
-    使用 pandas-ta 库计算标准 KDJ 指标。
+    使用 pandas-ta 库的 kdj 函数计算，采用传统的中国市场KDJ计算方法。
     KDJ 是一种随机指标，用于衡量价格在一定周期内的相对位置，帮助判断超买超卖状态。
 
     注意：需要至少 period 个数据点才能计算 KDJ。
@@ -120,21 +124,19 @@ def calculate_kdj(
             "pandas-ta is required. Install it with: pip install pandas-ta"
         )
 
-    # 使用 pandas-ta 计算 Stochastic Oscillator
-    # pandas-ta 的 stoch 函数返回 %K 和 %D
-    stoch_result = ta.stoch(high, low, close, k=period, d=d_smooth, smooth_k=k_smooth)
+    # 使用 pandas-ta 的 kdj 函数计算
+    # 注意：kdj 函数的 signal 参数对应 k_smooth（K值平滑周期）
+    kdj_result = ta.kdj(high, low, close, length=period, signal=k_smooth)
 
-    if stoch_result is None:
+    if kdj_result is None:
         # 如果数据不足，返回空的 Series
         empty_series = pd.Series([None] * len(close), index=close.index)
         return empty_series, empty_series, empty_series
 
-    # pandas-ta 返回的列名格式: STOCHk_period_smooth_k_d_smooth, STOCHd_period_smooth_k_d_smooth
-    k = stoch_result[f"STOCHk_{period}_{k_smooth}_{d_smooth}"]
-    d = stoch_result[f"STOCHd_{period}_{k_smooth}_{d_smooth}"]
-
-    # 计算 J 值 = 3*K - 2*D
-    j = 3 * k - 2 * d
+    # pandas-ta 返回的列名格式: K_period_signal, D_period_signal, J_period_signal
+    k = kdj_result[f"K_{period}_{k_smooth}"]
+    d = kdj_result[f"D_{period}_{k_smooth}"]
+    j = kdj_result[f"J_{period}_{k_smooth}"]
 
     return k, d, j
 
