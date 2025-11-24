@@ -28,6 +28,9 @@ BINANCE_BASE_URL = os.getenv("BINANCE_BASE_URL") or "https://www.binance.com"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10) AppleWebKit/537.36 Chrome/139"
 
 
+# 导入股票工具模块
+from mcp_aktools.tools import stock as stock_tools
+
 @mcp.tool(
     title="查找股票代码",
     description="根据股票名称、公司名称等关键词查找股票代码, 不支持加密货币。"
@@ -37,11 +40,7 @@ def search(
     keyword: str = Field(description="搜索关键词，公司名称、股票名称、股票代码、证券简称"),
     market: str = field_market,
 ):
-    info = ak_search(None, keyword, market)
-    if info is not None:
-        suffix = f"交易市场: {market}"
-        return "\n".join([info.to_string(), suffix])
-    return f"Not Found for {keyword}"
+    return stock_tools.search(keyword=keyword, market=market)
 
 
 @mcp.tool(
@@ -52,23 +51,7 @@ def stock_info(
     symbol: str = field_symbol,
     market: str = field_market,
 ):
-    markets = [
-        ["sh", ak.stock_individual_info_em],
-        ["sz", ak.stock_individual_info_em],
-        ["hk", ak.stock_hk_security_profile_em],
-    ]
-    for m in markets:
-        if m[0] != market:
-            continue
-        all = ak_cache(m[1], symbol=symbol, ttl=43200)
-        if all is None or all.empty:
-            continue
-        return all.to_string()
-
-    info = ak_search(symbol, market)
-    if info is not None:
-        return info.to_string()
-    return f"Not Found for {symbol}.{market}"
+    return stock_tools.stock_info(symbol=symbol, market=market)
 
 
 @mcp.tool(
@@ -81,53 +64,10 @@ def stock_prices(
     period: str = Field("daily", description="周期，如: daily(日线), weekly(周线，不支持美股)"),
     limit: int = Field(30, description="返回数量(int)", strict=False),
 ):
-    if period == "weekly":
-        delta = {"weeks": limit + 62}
-    else:
-        delta = {"days": limit + 62}
-    start_date = (datetime.now() - timedelta(**delta)).strftime("%Y%m%d")
-    markets = [
-        ["sh", ak.stock_zh_a_hist, {}],
-        ["sz", ak.stock_zh_a_hist, {}],
-        ["hk", ak.stock_hk_hist, {}],
-        ["us", stock_us_daily, {}],
-        ["sh", fund_etf_hist_sina, {"market": "sh"}],
-        ["sz", fund_etf_hist_sina, {"market": "sz"}],
-    ]
-    for m in markets:
-        if m[0] != market:
-            continue
-        kws = {"period": period, "start_date": start_date, **m[2]}
-        dfs = ak_cache(m[1], symbol=symbol, ttl=3600, **kws)
-        if dfs is None or dfs.empty:
-            continue
-        add_technical_indicators(dfs, dfs["收盘"], dfs["最低"], dfs["最高"])
-        columns = [
-            "日期", "开盘", "收盘", "最高", "最低", "成交量", "换手率",
-            "MACD", "DIF", "DEA", "KDJ.K", "KDJ.D", "KDJ.J", "RSI", "BOLL.U", "BOLL.M", "BOLL.L",
-        ]
-        all = dfs.to_csv(columns=columns, index=False, float_format="%.2f").strip().split("\n")
-        return "\n".join([all[0], *all[-limit:]])
-    return f"Not Found for {symbol}.{market}"
+    return stock_tools.stock_prices(symbol=symbol, market=market, period=period, limit=limit)
 
 
-def stock_us_daily(symbol, start_date="2025-01-01", period="daily"):
-    dfs = ak.stock_us_daily(symbol=symbol)
-    if dfs is None or dfs.empty:
-        return None
-    dfs.rename(columns={"date": "日期", "open": "开盘", "close": "收盘", "high": "最高", "low": "最低", "volume": "成交量"}, inplace=True)
-    dfs["换手率"] = None
-    dfs.index = pd.to_datetime(dfs["日期"], errors="coerce")
-    return dfs[start_date:"2222-01-01"]
-
-def fund_etf_hist_sina(symbol, market="sh", start_date="2025-01-01", period="daily"):
-    dfs = ak.fund_etf_hist_sina(symbol=f"{market}{symbol}")
-    if dfs is None or dfs.empty:
-        return None
-    dfs.rename(columns={"date": "日期", "open": "开盘", "close": "收盘", "high": "最高", "low": "最低", "volume": "成交量"}, inplace=True)
-    dfs["换手率"] = None
-    dfs.index = pd.to_datetime(dfs["日期"], errors="coerce")
-    return dfs[start_date:"2222-01-01"]
+# 辅助函数已迁移到 tools/stock.py
 
 
 @mcp.tool(
@@ -180,9 +120,7 @@ def stock_news_em(symbol, limit=20):
 def stock_indicators_a(
     symbol: str = field_symbol,
 ):
-    dfs = ak_cache(ak.stock_financial_abstract_ths, symbol=symbol)
-    keys = dfs.to_csv(index=False, float_format="%.3f").strip().split("\n")
-    return "\n".join([keys[0], *keys[-15:]])
+    return stock_tools.stock_indicators_a(symbol=symbol)
 
 
 @mcp.tool(
@@ -192,9 +130,7 @@ def stock_indicators_a(
 def stock_indicators_hk(
     symbol: str = field_symbol,
 ):
-    dfs = ak_cache(ak.stock_financial_hk_analysis_indicator_em, symbol=symbol, indicator="报告期")
-    keys = dfs.to_csv(index=False, float_format="%.3f").strip().split("\n")
-    return "\n".join(keys[0:15])
+    return stock_tools.stock_indicators_hk(symbol=symbol)
 
 
 @mcp.tool(
@@ -204,9 +140,7 @@ def stock_indicators_hk(
 def stock_indicators_us(
     symbol: str = field_symbol,
 ):
-    dfs = ak_cache(ak.stock_financial_us_analysis_indicator_em, symbol=symbol, indicator="单季报")
-    keys = dfs.to_csv(index=False, float_format="%.3f").strip().split("\n")
-    return "\n".join(keys[0:15])
+    return stock_tools.stock_indicators_us(symbol=symbol)
 
 
 @mcp.tool(
@@ -527,41 +461,7 @@ def trading_suggest(
     }
 
 
-def ak_search(symbol=None, keyword=None, market=None):
-    markets = [
-        ["sh", ak.stock_info_a_code_name, "code", "name"],
-        ["sh", ak.stock_info_sh_name_code, "证券代码", "证券简称"],
-        ["sz", ak.stock_info_sz_name_code, "A股代码", "A股简称"],
-        ["hk", ak.stock_hk_spot, "代码", "中文名称"],
-        ["hk", ak.stock_hk_spot_em, "代码", "名称"],
-        ["us", ak.get_us_stock_name, "symbol", "cname"],
-        ["us", ak.get_us_stock_name, "symbol", "name"],
-        ["sh", ak.fund_etf_spot_ths, "基金代码", "基金名称"],
-        ["sz", ak.fund_etf_spot_ths, "基金代码", "基金名称"],
-        ["sh", ak.fund_info_index_em, "基金代码", "基金名称"],
-        ["sz", ak.fund_info_index_em, "基金代码", "基金名称"],
-        ["sh", ak.fund_etf_spot_em, "代码", "名称"],
-        ["sz", ak.fund_etf_spot_em, "代码", "名称"],
-    ]
-    for m in markets:
-        if market and market != m[0]:
-            continue
-        all = ak_cache(m[1], ttl=86400, ttl2=86400*7)
-        if all is None or all.empty:
-            continue
-        for _, v in all.iterrows():
-            code, name = str(v[m[2]]).upper(), str(v[m[3]]).upper()
-            if symbol and symbol.upper() == code:
-                return v
-            if keyword and keyword.upper() in [code, name]:
-                return v
-        for _, v in all.iterrows() if keyword else []:
-            name = str(v[m[3]])
-            if len(keyword) >= 4 and keyword in name:
-                return v
-            if name.startswith(keyword):
-                return v
-    return None
+# ak_search 函数已迁移到 tools/stock.py
 
 
 def ak_cache(fun, *args, **kwargs) -> pd.DataFrame | None:
