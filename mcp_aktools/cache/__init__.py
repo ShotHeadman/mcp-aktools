@@ -11,8 +11,9 @@
 # 从旧的 cache.py 文件导入 CacheKey 以实现向后兼容
 # 我们使用 __import__ 和 fromlist 来获取实际的模块，而不是包
 import sys
-cache_module = sys.modules.get('mcp_aktools.cache')
-if cache_module and hasattr(cache_module, 'CacheKey'):
+
+cache_module = sys.modules.get("mcp_aktools.cache")
+if cache_module and hasattr(cache_module, "CacheKey"):
     # 如果已导入，使用它
     CacheKey = cache_module.CacheKey
 else:
@@ -21,9 +22,11 @@ else:
     # 我们需要直接导入 .py 文件
     import importlib.util
     from pathlib import Path
-    
+
     cache_py_path = Path(__file__).parent.parent / "cache.py"
-    spec = importlib.util.spec_from_file_location("_mcp_aktools_cache_legacy", cache_py_path)
+    spec = importlib.util.spec_from_file_location(
+        "_mcp_aktools_cache_legacy", cache_py_path
+    )
     if spec and spec.loader:
         legacy_cache = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(legacy_cache)

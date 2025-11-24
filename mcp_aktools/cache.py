@@ -1,6 +1,7 @@
-import sys
-import pathlib
 import logging
+import pathlib
+import sys
+
 import diskcache
 from cachetools import TTLCache
 
@@ -31,7 +32,7 @@ class CacheKey:
             return value
         except KeyError:
             pass
-        
+
         value = self.cache2.get(self.key)
         if value is not None:
             logger.debug(f"Cache hit (disk): {self.key}")
@@ -39,14 +40,16 @@ class CacheKey:
             self.cache1[self.key] = value
         else:
             logger.debug(f"Cache miss: {self.key}")
-        
+
         return value
 
     def set(self, val):
         try:
             self.cache1[self.key] = val
             self.cache2.set(self.key, val, expire=self.ttl2)
-            logger.debug(f"Cache set: {self.key} (ttl={self.ttl}s, disk_ttl={self.ttl2}s)")
+            logger.debug(
+                f"Cache set: {self.key} (ttl={self.ttl}s, disk_ttl={self.ttl2}s)"
+            )
         except Exception as e:
             # 缓存写入失败不应该中断操作
             logger.error(f"Cache write failed for {self.key}: {e}", exc_info=True)
