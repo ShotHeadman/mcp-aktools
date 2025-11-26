@@ -42,7 +42,7 @@ cp trading_rules.example.md my_trading_rules.md
 # docker-compose.yml
 services:
   mcp-aktools:
-    image: ghcr.io/aahl/mcp-aktools:latest
+    image: ghcr.io/shotheadman/mcp-aktools:latest
     volumes:
       - ./my_trading_rules.md:/app/trading_rules.md:ro
     environment:
@@ -202,8 +202,8 @@ A: 可以直接询问 AI："请显示我的交易规则"，AI 会调用 `get_tra
 ## 技术支持
 
 如有问题，请访问：
-- GitHub Issues: https://github.com/aahl/mcp-aktools/issues
-- 项目文档: https://github.com/aahl/mcp-aktools
+- GitHub Issues: https://github.com/shotheadman/mcp-aktools/issues
+- 项目文档: https://github.com/shotheadman/mcp-aktools
 
 ---
 

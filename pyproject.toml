@@ -16,8 +16,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/aahl/mcp-aktools"
-Repository = "https://github.com/aahl/mcp-aktools.git"
+Homepage = "https://github.com/shotheadman/mcp-aktools"
+Repository = "https://github.com/shotheadman/mcp-aktools.git"
 
 [project.scripts]
 mcp-aktools = "mcp_aktools:main"

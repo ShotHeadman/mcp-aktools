@@ -1,7 +1,7 @@
 services:
   mcp-aktools:
     container_name: mcp_aktools
-    image: ghcr.nju.edu.cn/aahl/mcp-aktools
+    image: io.github.shotheadman/mcp-aktools
     ports:
       - 8808:80
     environment:

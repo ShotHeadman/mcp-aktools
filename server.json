@@ -1,11 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
-  "name": "io.github.aahl/mcp-aktools",
+  "name": "io.github.shotheadman/mcp-aktools",
   "title": "AkTools MCP Server",
   "description": "MCP Server for stock and crypto",
   "version": "0.1.13",
   "repository": {
-    "url": "https://github.com/aahl/mcp-aktools",
+    "url": "https://github.com/shotheadman/mcp-aktools",
     "source": "github"
   },
   "packages": [
@@ -17,7 +17,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/aahl/mcp-aktools:latest",
+      "identifier": "ghcr.io/shotheadman/mcp-aktools:latest",
       "transport": {"type": "stdio"}
     }
   ]

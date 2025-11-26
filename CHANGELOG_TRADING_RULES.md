@@ -94,7 +94,7 @@
 ```yaml
 services:
   mcp-aktools:
-    image: ghcr.io/aahl/mcp-aktools:latest
+    image: ghcr.io/shotheadman/mcp-aktools:latest
     volumes:
       - ./trading_rules.md:/app/trading_rules.md:ro
     environment:
