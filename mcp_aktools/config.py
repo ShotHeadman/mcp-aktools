@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     retry_backoff_factor: float = 2.0
     retry_max_delay: int = 60
 
+    # 交易规则配置
+    trading_rule_file: Optional[str] = None
+
     def __init__(self, **kwargs):
         """初始化配置，支持从多个环境变量源读取代理配置。"""
         super().__init__(**kwargs)
@@ -225,3 +228,30 @@ def reload_settings() -> Settings:
     global _settings
     _settings = Settings()
     return _settings
+
+
+def get_trading_rules() -> Optional[str]:
+    """读取交易规则文件内容。
+
+    Returns:
+        Optional[str]: 规则文件内容，如果文件不存在或读取失败则返回 None
+    """
+    settings = get_settings()
+    if not settings.trading_rule_file:
+        return None
+
+    try:
+        import os
+
+        rule_path = settings.trading_rule_file
+        # 支持相对路径和绝对路径
+        if not os.path.isabs(rule_path):
+            rule_path = os.path.abspath(rule_path)
+
+        if not os.path.exists(rule_path):
+            return None
+
+        with open(rule_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return None

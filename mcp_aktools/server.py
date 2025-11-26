@@ -277,8 +277,20 @@ def register_tools(mcp: FastMCP) -> None:
     # ========== 投资建议工具 ==========
 
     @mcp.tool(
+        title="获取交易规则",
+        description="获取用户配置的交易规则文件内容，在分析走势和买入卖出点时应以此规则为最高基准",
+    )
+    def get_trading_rules():
+        from .config import get_trading_rules
+
+        rules = get_trading_rules()
+        if rules:
+            return f"交易规则内容:\n{rules}"
+        return "未配置交易规则文件，请在环境变量中设置 TRADING_RULE_FILE 指定规则文件路径"
+
+    @mcp.tool(
         title="给出投资建议",
-        description="基于AI对其他工具提供的数据分析结果给出具体投资建议",
+        description="基于AI对其他工具提供的数据分析结果给出具体投资建议。注意：应先调用 get_trading_rules 获取用户配置的交易规则，并以此为最高基准进行判断",
     )
     def trading_suggest(
         symbol: str = Field(description="股票代码或加密币种"),
