@@ -107,17 +107,14 @@ def stock_info(
         client = get_akshare_client()
 
         # 根据市场类型获取信息
-        markets = [
-            ["sh", ak.stock_individual_info_em],
-            ["sz", ak.stock_individual_info_em],
-            ["hk", ak.stock_hk_security_profile_em],
-        ]
-
-        for m in markets:
-            if m[0] != market:
-                continue
-
-            all_data = client.call(m[1], symbol=symbol, ttl=43200)
+        if market in ["sh", "sz"]:
+            # A 股使用带备用接口的方法
+            all_data = client.stock_individual_info_em(symbol=symbol, market=market, ttl=43200)
+            if all_data is not None and not all_data.empty:
+                return all_data.to_string()
+        elif market == "hk":
+            # 港股
+            all_data = client.call(ak.stock_hk_security_profile_em, symbol=symbol, ttl=43200)
             if all_data is not None and not all_data.empty:
                 return all_data.to_string()
 
@@ -178,24 +175,43 @@ def stock_prices(
         client = get_akshare_client()
 
         # 根据市场类型获取数据
-        markets = [
-            ["sh", ak.stock_zh_a_hist, {}],
-            ["sz", ak.stock_zh_a_hist, {}],
-            ["hk", ak.stock_hk_hist, {}],
-            ["us", _stock_us_daily, {}],
-            ["sh", _fund_etf_hist_sina, {"market": "sh"}],
-            ["sz", _fund_etf_hist_sina, {"market": "sz"}],
-        ]
-
-        for m in markets:
-            if m[0] != market:
-                continue
-
-            kws = {"period": period, "start_date": start_date, **m[2]}
-            dfs = client.call(m[1], symbol=symbol, ttl=3600, **kws)
-
-            if dfs is None or dfs.empty:
-                continue
+        dfs = None
+        
+        if market in ["sh", "sz"]:
+            # A 股使用带备用接口的方法
+            dfs = client.stock_zh_a_hist(
+                symbol=symbol,
+                market=market,
+                period=period,
+                start_date=start_date,
+                ttl=3600
+            )
+        elif market == "hk":
+            dfs = client.call(
+                ak.stock_hk_hist,
+                symbol=symbol,
+                period=period,
+                start_date=start_date,
+                ttl=3600
+            )
+        elif market == "us":
+            dfs = client.call(
+                _stock_us_daily,
+                symbol=symbol,
+                start_date=start_date,
+                ttl=3600
+            )
+        else:
+            # 尝试 ETF
+            dfs = client.call(
+                _fund_etf_hist_sina,
+                symbol=symbol,
+                market=market,
+                start_date=start_date,
+                ttl=3600
+            )
+        
+        if dfs is not None and not dfs.empty:
 
             # 添加技术指标
             add_technical_indicators(dfs, dfs["收盘"], dfs["最低"], dfs["最高"])

@@ -5,10 +5,14 @@
 - 错误处理和转换
 - 数据解析异常处理
 - 日志记录
+- 重试机制
 """
 
 import logging
+import time
 from typing import Any, Callable, Optional
+from http.client import RemoteDisconnected
+from urllib.error import URLError
 
 import akshare as ak
 import pandas as pd
@@ -37,6 +41,9 @@ class AkShareClient:
             settings: 可选的配置实例（如果为 None，将使用全局配置）
         """
         self.settings = settings or get_settings()
+        self.max_retries = self.settings.retry_max_attempts
+        self.retry_backoff_factor = self.settings.retry_backoff_factor
+        self.retry_max_delay = self.settings.retry_max_delay
         logger.info("AkShare 客户端已初始化")
 
     def call(
@@ -95,46 +102,73 @@ class AkShareClient:
         # 缓存未命中，调用 AkShare 函数
         logger.info(f"调用 AkShare 函数: {func.__name__}, args={args}, kwargs={kwargs}")
 
-        try:
-            # 调用 AkShare 函数
-            result = func(*args, **kwargs)
+        # 重试机制
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                # 调用 AkShare 函数
+                result = func(*args, **kwargs)
 
-            # 验证返回结果
-            if result is None:
-                logger.warning(f"AkShare 函数 {func.__name__} 返回 None")
-                return None
+                # 验证返回结果
+                if result is None:
+                    logger.warning(f"AkShare 函数 {func.__name__} 返回 None")
+                    return None
 
-            # 验证返回的是 DataFrame
-            if not isinstance(result, pd.DataFrame):
-                error_msg = f"期望返回 pandas.DataFrame，但得到 {type(result).__name__}"
-                logger.error(f"数据解析错误: {error_msg}")
-                raise DataParsingException(
-                    source=f"AkShare.{func.__name__}", message=error_msg
-                )
+                # 验证返回的是 DataFrame
+                if not isinstance(result, pd.DataFrame):
+                    error_msg = f"期望返回 pandas.DataFrame，但得到 {type(result).__name__}"
+                    logger.error(f"数据解析错误: {error_msg}")
+                    raise DataParsingException(
+                        source=f"AkShare.{func.__name__}", message=error_msg
+                    )
 
-            # 检查 DataFrame 是否为空
-            if result.empty:
-                logger.warning(f"AkShare 函数 {func.__name__} 返回空 DataFrame")
+                # 检查 DataFrame 是否为空
+                if result.empty:
+                    logger.warning(f"AkShare 函数 {func.__name__} 返回空 DataFrame")
+                    return result
+
+                # 存入缓存
+                cache.set(result)
+                logger.debug(f"数据已缓存: {cache_key}")
+
                 return result
 
-            # 存入缓存
-            cache.set(result)
-            logger.debug(f"数据已缓存: {cache_key}")
+            except DataParsingException:
+                # 重新抛出数据解析异常
+                raise
 
-            return result
+            except (RemoteDisconnected, URLError, ConnectionError, TimeoutError) as e:
+                # 网络相关错误，进行重试
+                last_exception = e
+                if attempt < self.max_retries - 1:
+                    # 指数退避策略
+                    wait_time = min(
+                        self.retry_backoff_factor ** attempt,
+                        self.retry_max_delay
+                    )
+                    logger.warning(
+                        f"网络错误 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}, "
+                        f"{wait_time:.1f}秒后重试..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"达到最大重试次数 ({self.max_retries}), 最后错误: {str(e)}"
+                    )
 
-        except DataParsingException:
-            # 重新抛出数据解析异常
-            raise
+            except Exception as e:
+                # 其他异常直接抛出
+                error_msg = str(e)
+                logger.error(
+                    f"AkShare 函数调用失败: {func.__name__}, " f"错误: {error_msg}",
+                    exc_info=True,
+                )
+                raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
 
-        except Exception as e:
-            # 捕获所有其他异常并转换为 APIException
-            error_msg = str(e)
-            logger.error(
-                f"AkShare 函数调用失败: {func.__name__}, " f"错误: {error_msg}",
-                exc_info=True,
-            )
-            raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
+        # 所有重试都失败
+        error_msg = f"网络连接失败，已重试 {self.max_retries} 次: {str(last_exception)}"
+        logger.error(f"AkShare 函数调用失败: {func.__name__}, {error_msg}")
+        raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
 
     def _generate_cache_key(self, func: Callable, args: tuple, kwargs: dict) -> str:
         """生成缓存键。
@@ -166,34 +200,55 @@ class AkShareClient:
     # 便捷方法：常用的 AkShare 函数封装
 
     def stock_individual_info_em(
-        self, symbol: str, ttl: Optional[int] = None
+        self, symbol: str, market: str = "sz", ttl: Optional[int] = None
     ) -> Optional[pd.DataFrame]:
-        """获取 A 股个股信息（东方财富）。
+        """获取 A 股个股信息（东方财富），失败时尝试雪球备用接口。
 
         Args:
             symbol: 股票代码
+            market: 市场标识 (sh/sz)，用于雪球备用接口
             ttl: 缓存 TTL（秒）
 
         Returns:
             股票信息 DataFrame
         """
-        return self.call(
-            ak.stock_individual_info_em, symbol=symbol, ttl=ttl or 43200  # 12 小时
-        )
+        try:
+            return self.call(
+                ak.stock_individual_info_em, symbol=symbol, ttl=ttl or 43200  # 12 小时
+            )
+        except APIException as e:
+            logger.warning(f"东财接口失败，尝试雪球备用接口: {e}")
+            try:
+                # 雪球接口需要格式: SH601127 或 SZ000001
+                xq_symbol = f"{market.upper()}{symbol}"
+                logger.info(f"尝试雪球接口，转换后的代码: {xq_symbol}")
+                result = self.call(
+                    ak.stock_individual_basic_info_xq, 
+                    symbol=xq_symbol, 
+                    ttl=ttl or 43200
+                )
+                if result is not None:
+                    logger.info(f"雪球备用接口成功获取数据: {xq_symbol}")
+                    return result
+            except Exception as fallback_error:
+                logger.error(f"雪球备用接口也失败: {fallback_error}")
+            raise e  # 抛出原始异常
 
     def stock_zh_a_hist(
         self,
         symbol: str,
+        market: str = "sz",
         period: str = "daily",
         start_date: str = "20200101",
         end_date: str = "20500101",
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
-        """获取 A 股历史行情数据。
+        """获取 A 股历史行情数据，失败时依次尝试腾讯和新浪备用接口。
 
         Args:
             symbol: 股票代码
+            market: 市场标识 (sh/sz)，用于备用接口
             period: 周期（daily/weekly/monthly）
             start_date: 开始日期（YYYYMMDD）
             end_date: 结束日期（YYYYMMDD）
@@ -203,15 +258,102 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
-        return self.call(
-            ak.stock_zh_a_hist,
-            symbol=symbol,
-            period=period,
-            start_date=start_date,
-            end_date=end_date,
-            adjust=adjust,
-            ttl=ttl or 3600,  # 1 小时
-        )
+        try:
+            return self.call(
+                ak.stock_zh_a_hist,
+                symbol=symbol,
+                period=period,
+                start_date=start_date,
+                end_date=end_date,
+                adjust=adjust,
+                ttl=ttl or 3600,  # 1 小时
+            )
+        except APIException as e:
+            # 只在 daily 周期时尝试备用接口（备用接口不支持 weekly/monthly）
+            if period == "daily":
+                logger.warning(f"东财历史行情接口失败，尝试备用接口: {e}")
+                
+                # 尝试腾讯接口
+                try:
+                    # 腾讯接口需要格式: sz000001 或 sh600000 (小写市场前缀)
+                    tx_symbol = f"{market.lower()}{symbol}"
+                    logger.info(f"尝试腾讯接口，转换后的代码: {tx_symbol}")
+                    result = self.call(
+                        ak.stock_zh_a_hist_tx,
+                        symbol=tx_symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust=adjust,
+                        ttl=ttl or 3600,
+                    )
+                    if result is not None and not result.empty:
+                        logger.info(f"腾讯备用接口成功获取数据: {tx_symbol}")
+                        # 统一列名格式，使其与东财接口一致
+                        if 'date' in result.columns:
+                            result.rename(columns={'date': '日期'}, inplace=True)
+                        if 'open' in result.columns:
+                            result.rename(columns={
+                                'open': '开盘',
+                                'close': '收盘',
+                                'high': '最高',
+                                'low': '最低',
+                                'amount': '成交量'
+                            }, inplace=True)
+                        # 添加缺失的列
+                        if '换手率' not in result.columns:
+                            result['换手率'] = None
+                        if '成交额' not in result.columns:
+                            result['成交额'] = None
+                        if '振幅' not in result.columns:
+                            result['振幅'] = None
+                        if '涨跌幅' not in result.columns:
+                            result['涨跌幅'] = None
+                        if '涨跌额' not in result.columns:
+                            result['涨跌额'] = None
+                        return result
+                except Exception as tx_error:
+                    logger.warning(f"腾讯备用接口失败: {tx_error}")
+                
+                # 尝试新浪接口
+                try:
+                    # 新浪接口需要格式: sh600000 或 sz000001 (小写市场前缀)
+                    sina_symbol = f"{market.lower()}{symbol}"
+                    logger.info(f"尝试新浪接口，转换后的代码: {sina_symbol}")
+                    result = self.call(
+                        ak.stock_zh_a_daily,
+                        symbol=sina_symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                        adjust=adjust,
+                        ttl=ttl or 3600,
+                    )
+                    if result is not None and not result.empty:
+                        logger.info(f"新浪备用接口成功获取数据: {sina_symbol}")
+                        # 统一列名格式，使其与东财接口一致
+                        if 'date' in result.columns:
+                            result.rename(columns={'date': '日期'}, inplace=True)
+                        if 'open' in result.columns:
+                            result.rename(columns={
+                                'open': '开盘',
+                                'close': '收盘',
+                                'high': '最高',
+                                'low': '最低',
+                                'volume': '成交量',
+                                'amount': '成交额',
+                                'turnover': '换手率'
+                            }, inplace=True)
+                        # 添加缺失的列
+                        if '振幅' not in result.columns:
+                            result['振幅'] = None
+                        if '涨跌幅' not in result.columns:
+                            result['涨跌幅'] = None
+                        if '涨跌额' not in result.columns:
+                            result['涨跌额'] = None
+                        return result
+                except Exception as sina_error:
+                    logger.error(f"新浪备用接口也失败: {sina_error}")
+            
+            raise e  # 所有接口都失败，抛出原始异常
 
     def stock_hk_hist(
         self,
@@ -222,7 +364,7 @@ class AkShareClient:
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
-        """获取港股历史行情数据。
+        """获取港股历史行情数据，失败时尝试新浪备用接口。
 
         Args:
             symbol: 股票代码
@@ -235,15 +377,66 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
-        return self.call(
-            ak.stock_hk_hist,
-            symbol=symbol,
-            period=period,
-            start_date=start_date,
-            end_date=end_date,
-            adjust=adjust,
-            ttl=ttl or 3600,  # 1 小时
-        )
+        try:
+            return self.call(
+                ak.stock_hk_hist,
+                symbol=symbol,
+                period=period,
+                start_date=start_date,
+                end_date=end_date,
+                adjust=adjust,
+                ttl=ttl or 3600,  # 1 小时
+            )
+        except APIException as e:
+            # 只在 daily 周期时尝试新浪备用接口（新浪接口不支持 weekly/monthly）
+            if period == "daily":
+                logger.warning(f"东财港股历史行情接口失败，尝试新浪备用接口: {e}")
+                try:
+                    logger.info(f"尝试新浪港股接口，代码: {symbol}")
+                    result = self.call(
+                        ak.stock_hk_daily,
+                        symbol=symbol,
+                        adjust=adjust,
+                        ttl=ttl or 3600,
+                    )
+                    if result is not None and not result.empty:
+                        logger.info(f"新浪港股备用接口成功获取数据: {symbol}")
+                        # 统一列名格式，使其与东财接口一致
+                        if 'date' in result.columns:
+                            result.rename(columns={'date': '日期'}, inplace=True)
+                        if 'open' in result.columns:
+                            result.rename(columns={
+                                'open': '开盘',
+                                'close': '收盘',
+                                'high': '最高',
+                                'low': '最低',
+                                'volume': '成交量'
+                            }, inplace=True)
+                        # 添加缺失的列
+                        if '成交额' not in result.columns:
+                            result['成交额'] = None
+                        if '换手率' not in result.columns:
+                            result['换手率'] = None
+                        if '振幅' not in result.columns:
+                            result['振幅'] = None
+                        if '涨跌幅' not in result.columns:
+                            result['涨跌幅'] = None
+                        if '涨跌额' not in result.columns:
+                            result['涨跌额'] = None
+                        
+                        # 过滤日期范围（新浪接口返回所有历史数据）
+                        if '日期' in result.columns:
+                            result['日期'] = pd.to_datetime(result['日期'])
+                            start = pd.to_datetime(start_date)
+                            end = pd.to_datetime(end_date)
+                            result = result[(result['日期'] >= start) & (result['日期'] <= end)]
+                            result['日期'] = result['日期'].dt.strftime('%Y-%m-%d')
+                        
+                        return result
+                except Exception as sina_error:
+                    logger.error(f"新浪港股备用接口也失败: {sina_error}")
+            
+            raise e  # 抛出原始异常
 
     def stock_us_daily(
         self, symbol: str, adjust: str = "", ttl: Optional[int] = None
