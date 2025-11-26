@@ -129,7 +129,8 @@ class LoggingConfig:
         Returns:
             配置好的 StreamHandler 对象
         """
-        handler = logging.StreamHandler(sys.stdout)
+        # 使用 stderr 而不是 stdout，避免干扰 stdio 模式的 MCP 通信
+        handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(formatter)
         return handler
 
