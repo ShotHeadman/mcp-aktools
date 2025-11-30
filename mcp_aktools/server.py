@@ -141,6 +141,38 @@ def register_tools(mcp: FastMCP) -> None:
     ):
         return stock_tools.stock_indicators_us(symbol=symbol)
 
+    @mcp.tool(
+        title="A股分时K线数据",
+        description="获取A股分时K线数据，支持1/5/15/30/60分钟周期。优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。返回所有可用数据",
+    )
+    def stock_zh_a_minute(
+        symbol: str = field_symbol,
+        market: str = field_market,
+        period: str = Field("5", description="分钟周期，仅支持: 1, 5, 15, 30, 60"),
+        adjust: str = Field(
+            "", description="复权类型: 空字符串(不复权), qfq(前复权), hfq(后复权)"
+        ),
+    ):
+        return stock_tools.stock_zh_a_minute(
+            symbol=symbol, market=market, period=period, adjust=adjust
+        )
+
+    @mcp.tool(
+        title="A股日内分笔数据",
+        description="获取A股最近一个交易日的实时分笔数据，支持智能筛选：全部数据、大单买入、大单卖出、所有大单、汇总统计。推荐使用summary查看概况，或筛选大单以减少token消耗",
+    )
+    def stock_intraday_em(
+        symbol: str = field_symbol,
+        filter_type: str = Field(
+            "summary",
+            description="筛选类型: all(全部), big_buy(大单买入), big_sell(大单卖出), big_all(所有大单), summary(汇总统计)",
+        ),
+        min_volume: int = Field(500, description="大单最小手数阈值，默认500手", strict=False),
+    ):
+        return stock_tools.stock_intraday_em(
+            symbol=symbol, filter_type=filter_type, min_volume=min_volume
+        )
+
     # ========== 加密货币工具 ==========
 
     @mcp.tool(
