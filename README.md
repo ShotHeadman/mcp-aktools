@@ -134,8 +134,8 @@ MCP AkTools 支持自定义交易规则文件，在分析走势和买入卖出�
 - `search` - 查找股票代码，支持A股、港股、美股
 - `stock_info` - 获取股票信息
 - `stock_prices` - 获取股票历史价格（日线/周线）
-- `stock_zh_a_minute` - A股分时K线数据（支持1/5/15/30/60分钟，带备用接口）
-- `stock_intraday_em` - A股日内分笔数据（支持大单筛选、买卖盘统计等智能分析）
+- `stock_zh_a_minute` - A股分时K线数据（支持1/5/15/30/60分钟，默认返回最近3个交易日数据，可自定义1-10个交易日，带备用接口）
+- `stock_tick_data` - A股分笔成交数据（支持大单筛选、买卖盘统计等智能分析）
 - `stock_indicators_a` - A股关键指标
 - `stock_indicators_hk` - 港股关键指标
 - `stock_indicators_us` - 美股关键指标

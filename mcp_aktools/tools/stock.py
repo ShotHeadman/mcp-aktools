@@ -370,21 +370,23 @@ def stock_zh_a_minute(
     market: str = field_market,
     period: str = Field("5", description="分钟周期，仅支持: 1, 5, 15, 30, 60"),
     adjust: str = Field("", description="复权类型: 空字符串(不复权), qfq(前复权), hfq(后复权)"),
+    trading_days: int = Field(3, description="返回最近N个交易日的数据，默认3天，最大10天"),
 ) -> str:
     """获取A股分时K线数据。
 
     获取指定股票的历史分时数据，支持1/5/15/30/60分钟周期。
     优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。
-    返回所有可用的分时数据。
+    默认返回最近5个交易日的分时数据，以减少token消耗。
 
     Args:
         symbol: 股票代码
         market: 市场类型（sh/sz）
         period: 分钟周期（1/5/15/30/60）
         adjust: 复权类型（空字符串/qfq/hfq），注意1分钟数据不支持复权
+        trading_days: 返回最近N个交易日的数据（默认5，最大30）
 
     Returns:
-        str: CSV 格式的分时数据
+        str: CSV 格式的分时数据（最近N个交易日）
     """
     try:
         # 验证参数
@@ -395,51 +397,116 @@ def stock_zh_a_minute(
             return "参数错误: period 仅支持 1, 5, 15, 30, 60"
         if adjust not in ["", "qfq", "hfq"]:
             return "参数错误: adjust 仅支持空字符串(不复权), qfq(前复权), hfq(后复权)"
+        
+        # 处理并限制交易日数量（默认3天，最大10天）
+        if not isinstance(trading_days, int):
+            trading_days = 3  # 默认值
+        trading_days = max(1, min(trading_days, 10))
 
-        logger.info(f"获取A股分时数据: symbol={symbol}, market={market}, period={period}, adjust={adjust}")
+        logger.info(f"获取A股分时数据: symbol={symbol}, market={market}, period={period}, adjust={adjust}, trading_days={trading_days}")
 
         client = get_akshare_client()
+        
+        # 尝试获取数据，如果交易日不足则扩大范围重试
+        max_retries = 3
+        calendar_days = 7  # 初始获取7个自然日的数据
         dfs = None
         
-        # 优先尝试东财接口（数据更丰富）
-        try:
-            logger.info("尝试东财接口获取分时数据")
-            dfs = client.call(
-                ak.stock_zh_a_hist_min_em,
-                symbol=symbol,
-                start_date="1979-09-01 09:32:00",
-                end_date="2222-01-01 09:32:00",
-                period=period,
-                adjust=adjust,
-                ttl=300  # 5分钟缓存
-            )
-            if dfs is not None and not dfs.empty:
-                logger.info("东财接口成功获取数据")
-        except Exception as e:
-            logger.warning(f"东财接口失败: {e}")
-        
-        # 如果东财接口失败，尝试新浪备用接口
-        if dfs is None or dfs.empty:
+        for retry in range(max_retries):
+            start_date = (datetime.now() - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
+            end_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 优先尝试东财接口（数据更丰富）
             try:
-                logger.info("尝试新浪备用接口获取分时数据")
-                # 新浪接口需要格式: sh600000 或 sz000001
-                full_symbol = f"{market.lower()}{symbol}"
+                logger.info(f"尝试东财接口获取分时数据，时间范围: {start_date} 至 {end_date} (第{retry+1}次尝试)")
                 dfs = client.call(
-                    ak.stock_zh_a_minute,
-                    symbol=full_symbol,
+                    ak.stock_zh_a_hist_min_em,
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
                     period=period,
                     adjust=adjust,
                     ttl=300  # 5分钟缓存
                 )
                 if dfs is not None and not dfs.empty:
-                    logger.info("新浪备用接口成功获取数据")
+                    logger.info(f"东财接口成功获取数据，共{len(dfs)}条记录")
             except Exception as e:
-                logger.error(f"新浪备用接口也失败: {e}")
-
+                logger.warning(f"东财接口失败: {e}")
+            
+            # 如果东财接口失败，尝试新浪备用接口
+            if dfs is None or dfs.empty:
+                try:
+                    logger.info("尝试新浪备用接口获取分时数据")
+                    full_symbol = f"{market.lower()}{symbol}"
+                    dfs = client.call(
+                        ak.stock_zh_a_minute,
+                        symbol=full_symbol,
+                        period=period,
+                        adjust=adjust,
+                        ttl=300  # 5分钟缓存
+                    )
+                    if dfs is not None and not dfs.empty:
+                        logger.info(f"新浪备用接口成功获取数据，共{len(dfs)}条记录")
+                        # 新浪接口返回所有数据，需要手动过滤
+                        time_col = dfs.columns[0]
+                        dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
+                        cutoff_date = datetime.now() - timedelta(days=calendar_days)
+                        dfs = dfs[dfs[time_col] >= cutoff_date]
+                        logger.info(f"过滤后剩余{len(dfs)}条记录")
+                except Exception as e:
+                    logger.error(f"新浪备用接口也失败: {e}")
+            
+            # 检查是否获取到数据
+            if dfs is None or dfs.empty:
+                if retry < max_retries - 1:
+                    calendar_days += 7  # 扩大7天继续尝试
+                    logger.warning(f"未获取到数据，扩大范围到{calendar_days}天后重试")
+                    continue
+                else:
+                    return f"Not Found for {symbol}.{market}"
+            
+            # 检查交易日数量
+            time_col = dfs.columns[0]
+            dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
+            dfs['_trade_date'] = dfs[time_col].dt.date
+            unique_dates = sorted(dfs['_trade_date'].unique(), reverse=True)
+            actual_trading_days = len(unique_dates)
+            
+            logger.info(f"获取到{actual_trading_days}个交易日的数据")
+            
+            # 如果交易日数量不足，且还有重试机会，则扩大范围重试
+            if actual_trading_days < trading_days and retry < max_retries - 1:
+                calendar_days += 7  # 扩大7天
+                logger.warning(f"交易日数量不足（{actual_trading_days}<{trading_days}），扩大范围到{calendar_days}天后重试")
+                dfs = None  # 清空数据，准备重试
+                continue
+            
+            # 数据充足或已达到最大重试次数，跳出循环
+            break
+        
         if dfs is None or dfs.empty:
             return f"Not Found for {symbol}.{market}"
-
-        # 返回所有数据
+        
+        # 过滤最近N个交易日的数据
+        time_col = dfs.columns[0]
+        if '_trade_date' not in dfs.columns:
+            dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
+            dfs['_trade_date'] = dfs[time_col].dt.date
+        
+        unique_dates = sorted(dfs['_trade_date'].unique(), reverse=True)
+        
+        # 取最近N个交易日
+        if len(unique_dates) > trading_days:
+            recent_dates = unique_dates[:trading_days]
+            dfs = dfs[dfs['_trade_date'].isin(recent_dates)]
+            logger.info(f"过滤后保留最近{trading_days}个交易日，共{len(dfs)}条记录")
+        else:
+            logger.info(f"数据包含{len(unique_dates)}个交易日，共{len(dfs)}条记录")
+        
+        # 删除临时列
+        dfs = dfs.drop(columns=['_trade_date'])
+        
+        # 返回最近N个交易日的数据
         return dfs.to_csv(index=False, float_format="%.2f")
 
     except ValidationException as e:
@@ -450,18 +517,18 @@ def stock_zh_a_minute(
         return f"获取失败: {str(e)}"
 
 
-def stock_intraday_em(
+def stock_tick_data(
     symbol: str = field_symbol,
     filter_type: str = Field("all", description="筛选类型: all(全部), big_buy(大单买入), big_sell(大单卖出), big_all(所有大单), summary(汇总统计)"),
     min_volume: int = Field(500, description="大单最小手数阈值，默认500手"),
 ) -> str:
-    """获取A股日内分笔数据（东财接口）。
+    """获取A股最近一个交易日的分笔成交数据（腾讯接口）。
 
-    获取指定股票最近一个交易日的实时分笔数据，支持智能筛选。
-    数据包括：时间、成交价、手数、买卖盘性质。
+    获取指定股票最近一个交易日的分笔成交数据，支持智能筛选。
+    数据包括：成交时间、成交价格、成交量(手)、买卖盘性质。
     
     筛选选项：
-    - all: 返回所有分笔数据（可能有4000+条，token消耗大）
+    - all: 返回所有分笔数据（可能有1000+条，token消耗大）
     - big_buy: 只返回大单买入（手数>=min_volume且为买盘）
     - big_sell: 只返回大单卖出（手数>=min_volume且为卖盘）
     - big_all: 返回所有大单（手数>=min_volume）
@@ -483,49 +550,66 @@ def stock_intraday_em(
         
         min_volume = max(min_volume, 100)  # 最小100手
 
-        logger.info(f"获取A股日内分笔数据: symbol={symbol}, filter_type={filter_type}, min_volume={min_volume}")
+        logger.info(f"获取A股分笔数据: symbol={symbol}, filter_type={filter_type}, min_volume={min_volume}")
 
         client = get_akshare_client()
         
+        # 使用腾讯接口获取分笔数据
+        market_prefix = "sh" if symbol.startswith("6") else "sz"
+        full_symbol = f"{market_prefix}{symbol}"
+        logger.info(f"腾讯接口获取分笔数据: {full_symbol}")
+        
         dfs = client.call(
-            ak.stock_intraday_em,
-            symbol=symbol,
+            ak.stock_zh_a_tick_tx_js,
+            symbol=full_symbol,
             ttl=60  # 1分钟缓存
         )
-
+        
         if dfs is None or dfs.empty:
             return f"Not Found for {symbol}"
-
+        
+        logger.info(f"腾讯接口成功，共{len(dfs)}条记录")
+        
+        # 统一列名
+        dfs = dfs.rename(columns={
+            '成交时间': '时间',
+            '成交价格': '成交价',
+            '成交量': '手数',
+            '性质': '买卖盘性质'
+        })
+        
+        # 确保必要的列存在
+        required_cols = ['时间', '成交价', '手数', '买卖盘性质']
+        for col in required_cols:
+            if col not in dfs.columns:
+                return f"数据格式错误: 缺少列 {col}"
+        
         total_rows = len(dfs)
         
         # 根据筛选类型处理数据
         if filter_type == "all":
-            # 返回全部数据
             info = f"# 共{total_rows}条分笔数据\n"
-            return info + dfs.to_csv(index=False, float_format="%.2f")
+            return info + dfs[required_cols].to_csv(index=False, float_format="%.2f")
         
         elif filter_type == "summary":
-            # 返回汇总统计
             total_volume = dfs['手数'].sum()
-            total_amount = (dfs['成交价'] * dfs['手数'] * 100).sum()  # 手数转股数
+            total_amount = (dfs['成交价'] * dfs['手数'] * 100).sum()
             avg_price = dfs['成交价'].mean()
             
-            # 买卖盘统计
             buy_count = len(dfs[dfs['买卖盘性质'] == '买盘'])
             sell_count = len(dfs[dfs['买卖盘性质'] == '卖盘'])
-            neutral_count = len(dfs[dfs['买卖盘性质'] == '中性盘'])
+            neutral_count = total_rows - buy_count - sell_count
             
             buy_volume = dfs[dfs['买卖盘性质'] == '买盘']['手数'].sum()
             sell_volume = dfs[dfs['买卖盘性质'] == '卖盘']['手数'].sum()
             
-            # 大单统计
             big_orders = dfs[dfs['手数'] >= min_volume]
             big_count = len(big_orders)
-            big_volume = big_orders['手数'].sum()
+            big_volume = big_orders['手数'].sum() if big_count > 0 else 0
             big_buy_count = len(big_orders[big_orders['买卖盘性质'] == '买盘'])
             big_sell_count = len(big_orders[big_orders['买卖盘性质'] == '卖盘'])
-            big_buy_volume = big_orders[big_orders['买卖盘性质'] == '买盘']['手数'].sum()
-            big_sell_volume = big_orders[big_orders['买卖盘性质'] == '卖盘']['手数'].sum()
+            big_buy_volume = big_orders[big_orders['买卖盘性质'] == '买盘']['手数'].sum() if big_buy_count > 0 else 0
+            big_sell_volume = big_orders[big_orders['买卖盘性质'] == '卖盘']['手数'].sum() if big_sell_count > 0 else 0
             
             summary = f"""# 分笔数据汇总统计 (股票代码: {symbol})
 
@@ -541,11 +625,11 @@ def stock_intraday_em(
 - 中性盘笔数: {neutral_count} ({neutral_count/total_rows*100:.1f}%)
 - 买盘成交量: {buy_volume:,} 手
 - 卖盘成交量: {sell_volume:,} 手
-- 买卖比: {buy_volume/sell_volume:.2f} (买盘/卖盘)
+- 买卖比: {buy_volume/sell_volume if sell_volume > 0 else 0:.2f} (买盘/卖盘)
 
 ## 大单统计 (>={min_volume}手)
 - 大单笔数: {big_count} ({big_count/total_rows*100:.1f}%)
-- 大单成交量: {big_volume:,} 手 ({big_volume/total_volume*100:.1f}%)
+- 大单成交量: {big_volume:,} 手 ({big_volume/total_volume*100 if total_volume > 0 else 0:.1f}%)
 - 大单买入: {big_buy_count} 笔, {big_buy_volume:,} 手
 - 大单卖出: {big_sell_count} 笔, {big_sell_volume:,} 手
 - 大单买卖比: {big_buy_volume/big_sell_volume if big_sell_volume > 0 else 0:.2f}
@@ -553,7 +637,6 @@ def stock_intraday_em(
             return summary
         
         else:
-            # 筛选大单
             big_orders = dfs[dfs['手数'] >= min_volume]
             
             if filter_type == "big_buy":
@@ -569,13 +652,13 @@ def stock_intraday_em(
             if result.empty:
                 return f"未找到符合条件的大单 (>={min_volume}手)"
             
-            return info + result.to_csv(index=False, float_format="%.2f")
+            return info + result[required_cols].to_csv(index=False, float_format="%.2f")
 
     except ValidationException as e:
         logger.error(f"参数验证失败: {e}")
         return f"参数错误: {e.message}"
     except Exception as e:
-        logger.error(f"获取A股日内分笔数据失败: {e}", exc_info=True)
+        logger.error(f"获取A股分笔数据失败: {e}", exc_info=True)
         return f"获取失败: {str(e)}"
 
 
