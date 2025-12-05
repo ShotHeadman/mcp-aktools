@@ -289,6 +289,15 @@ def register_tools(mcp: FastMCP) -> None:
     ):
         return market_tools.stock_sector_fund_flow_rank(days=days, cate=cate)
 
+    @mcp.tool(
+        title="A股实时行情",
+        description="获取中国A股市场(上证、深证)的实时行情数据，包括股票代码、名称、最新价、涨跌幅、成交量、成交额等信息",
+    )
+    def stock_zh_a_spot_em(
+        limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
+    ):
+        return market_tools.stock_zh_a_spot_em(limit=limit)
+
     # ========== 新闻工具 ==========
 
     @mcp.tool(

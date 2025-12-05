@@ -410,3 +410,66 @@ def stock_sector_fund_flow_rank(
     except Exception as e:
         logger.error(f"获取资金流数据失败: {e}", exc_info=True)
         return f"获取失败: {str(e)}"
+
+
+def stock_zh_a_spot_em(
+    limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
+) -> str:
+    """获取 A 股实时行情数据。
+
+    从东方财富获取全市场 A 股实时行情数据，包括股票代码、名称、
+    最新价、涨跌幅、成交量、成交额等信息。
+
+    Args:
+        limit: 返回数量，范围 30-100
+
+    Returns:
+        str: CSV 格式的实时行情数据
+
+    Raises:
+        ValidationException: 当参数验证失败时
+
+    Example:
+        >>> result = stock_zh_a_spot_em(50)
+        >>> print(result)
+        代码,名称,最新价,涨跌幅,成交量,成交额
+        000001,平安银行,10.50,1.23,1234567,12345678.00
+    """
+    logger.info(f"获取A股实时行情: limit={limit}")
+
+    try:
+        # 验证参数
+        Validators.validate_limit(limit, min_val=30, max_val=100)
+
+        # 获取实时行情数据，使用 60 秒 TTL 缓存
+        client = _get_akshare_client()
+        dfs = client.call(ak.stock_zh_a_spot_em, ttl=60)
+
+        if dfs is None or dfs.empty:
+            logger.warning("未获取到A股实时行情数据")
+            return "获取实时行情数据失败"
+
+        # 选择关键列（根据东财接口返回的列名）
+        # 东财接口返回列: 序号, 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅, 最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率, 总市值, 流通市值, 涨速, 5分钟涨跌, 60日涨跌幅, 年初至今涨跌幅
+        columns = ['代码', '名称', '最新价', '涨跌幅', '涨跌额', '成交量', '成交额', '振幅', '最高', '最低', '今开', '昨收', '换手率']
+        
+        # 只选择存在的列
+        available_columns = [col for col in columns if col in dfs.columns]
+        if not available_columns:
+            logger.error(f"实时行情数据列名不匹配，实际列名: {list(dfs.columns)}")
+            return "数据格式异常，列名不匹配"
+
+        result_df = dfs[available_columns].head(int(limit))
+
+        # 转换为 CSV 格式
+        result = result_df.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(result_df)} 条A股实时行情数据")
+        return result
+
+    except ValidationException as e:
+        logger.error(f"参数验证失败: {e}")
+        return f"参数错误: {e.message}"
+    except Exception as e:
+        logger.error(f"获取A股实时行情失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"
