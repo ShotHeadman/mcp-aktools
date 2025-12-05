@@ -13,3 +13,4 @@ wheels/
 .cache
 .DS_Store
 output.txt
+app.log
