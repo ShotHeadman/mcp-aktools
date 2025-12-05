@@ -23,6 +23,16 @@ from ..utils.validators import Validators
 
 logger = logging.getLogger(__name__)
 
+# 新浪接口列名映射：英文到中文
+SINA_COLUMN_MAPPING = {
+    'day': '时间',
+    'open': '开盘',
+    'high': '最高',
+    'low': '最低',
+    'close': '收盘',
+    'volume': '成交量',
+}
+
 # 初始化客户端
 _akshare_client: Optional[AkShareClient] = None
 
@@ -437,6 +447,7 @@ def stock_zh_a_minute(
             if dfs is None or dfs.empty:
                 try:
                     logger.info("尝试新浪备用接口获取分时数据")
+                    # 格式化 symbol 为小写市场前缀加代码（如 sz000876）
                     full_symbol = f"{market.lower()}{symbol}"
                     dfs = client.call(
                         ak.stock_zh_a_minute,
@@ -447,6 +458,8 @@ def stock_zh_a_minute(
                     )
                     if dfs is not None and not dfs.empty:
                         logger.info(f"新浪备用接口成功获取数据，共{len(dfs)}条记录")
+                        # 统一新浪接口的列名为中文
+                        dfs = _normalize_sina_columns(dfs)
                         # 新浪接口返回所有数据，需要手动过滤
                         time_col = dfs.columns[0]
                         dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
@@ -663,6 +676,29 @@ def stock_tick_data(
 
 
 # 辅助函数
+
+
+def _normalize_sina_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """统一新浪接口的列名为中文。
+    
+    将新浪分时接口返回的英文列名映射为中文列名，
+    以保持与东财接口返回数据格式的一致性。
+    
+    Args:
+        df: 包含英文列名的 DataFrame
+        
+    Returns:
+        pd.DataFrame: 列名已映射为中文的 DataFrame，数据值保持不变
+    """
+    if df is None or df.empty:
+        return df
+    
+    # 只重命名存在的列
+    rename_dict = {k: v for k, v in SINA_COLUMN_MAPPING.items() if k in df.columns}
+    if rename_dict:
+        df = df.rename(columns=rename_dict)
+    
+    return df
 
 
 def _stock_us_daily(

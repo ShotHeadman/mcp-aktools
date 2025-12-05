@@ -53,6 +53,7 @@ class AkShareClient:
         cache_key: Optional[str] = None,
         ttl: Optional[int] = None,
         ttl2: Optional[int] = None,
+        timeout: Optional[float] = None,
         **kwargs: Any,
     ) -> Optional[pd.DataFrame]:
         """调用 AkShare 函数并处理缓存和错误。
@@ -69,6 +70,7 @@ class AkShareClient:
             cache_key: 可选的缓存键（如果为 None，将自动生成）
             ttl: 内存缓存 TTL（秒），如果为 None 使用配置值
             ttl2: 磁盘缓存 TTL（秒），如果为 None 使用 ttl * 2
+            timeout: 请求超时时间（秒），如果为 None 使用 AkShare 默认值
             **kwargs: 传递给函数的关键字参数
 
         Returns:
@@ -87,6 +89,10 @@ class AkShareClient:
             ttl = self.settings.cache_memory_ttl
         if ttl2 is None:
             ttl2 = ttl * 2
+
+        # 传递 timeout 参数到 kwargs
+        if timeout is not None:
+            kwargs['timeout'] = timeout
 
         # 初始化缓存
         cache = CacheKey.init(
@@ -137,7 +143,25 @@ class AkShareClient:
                 # 重新抛出数据解析异常
                 raise
 
-            except (RemoteDisconnected, URLError, ConnectionError, TimeoutError) as e:
+            except TimeoutError as e:
+                # 超时错误，记录特定日志并进行重试
+                last_exception = e
+                if attempt < self.max_retries - 1:
+                    wait_time = min(
+                        self.retry_backoff_factor ** attempt,
+                        self.retry_max_delay
+                    )
+                    logger.warning(
+                        f"请求超时 (尝试 {attempt + 1}/{self.max_retries}): {func.__name__}, "
+                        f"timeout={timeout}, {wait_time:.1f}秒后重试..."
+                    )
+                    time.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"请求超时，达到最大重试次数 ({self.max_retries}): {func.__name__}"
+                    )
+
+            except (RemoteDisconnected, URLError, ConnectionError) as e:
                 # 网络相关错误，进行重试
                 last_exception = e
                 if attempt < self.max_retries - 1:
