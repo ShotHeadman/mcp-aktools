@@ -18,6 +18,7 @@ from pydantic import Field
 from ..clients.akshare import AkShareClient
 from ..config import get_settings
 from ..exceptions import ValidationException
+from ..utils.data_validators import OHLCValidator
 from ..utils.indicators import add_technical_indicators
 from ..utils.validators import Validators
 
@@ -222,6 +223,11 @@ def stock_prices(
             )
         
         if dfs is not None and not dfs.empty:
+            # 验证 OHLC 数据
+            dfs, is_valid, warnings = OHLCValidator.validate(dfs)
+            if not is_valid:
+                for warning in warnings:
+                    logger.warning(f"OHLC 数据验证警告 ({symbol}.{market}): {warning}")
 
             # 添加技术指标
             add_technical_indicators(dfs, dfs["收盘"], dfs["最低"], dfs["最高"])
