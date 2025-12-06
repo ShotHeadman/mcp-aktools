@@ -100,7 +100,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         title="获取股票历史价格",
-        description="根据股票代码和市场获取股票历史价格及技术指标, 不支持加密货币",
+        description="根据股票代码和市场获取股票日线或周线级别的历史价格及技术指标。"
+        "此接口用于获取日线(daily)或周线(weekly)数据，不适用于分钟级别数据。"
+        "如需分钟级别的分时数据，请使用 stock_zh_a_minute 接口。不支持加密货币。",
     )
     def stock_prices(
         symbol: str = field_symbol,
@@ -143,7 +145,10 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         title="A股分时K线数据",
-        description="获取A股分时K线数据，支持1/5/15/30/60分钟周期。优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。默认返回最近3个交易日数据",
+        description="获取A股分钟级别的分时K线数据，支持1/5/15/30/60分钟周期。"
+        "此接口仅用于获取分时数据，仅在用户明确请求分时数据、分钟数据或分钟K线时使用。"
+        "如需日线或周线数据，请使用 stock_prices 接口。"
+        "优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。默认返回最近3个交易日数据",
     )
     def stock_zh_a_minute(
         symbol: str = field_symbol,
