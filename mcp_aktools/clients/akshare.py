@@ -289,7 +289,7 @@ class AkShareClient:
         market: str = "sz",
         period: str = "daily",
         start_date: str = "20200101",
-        end_date: str = "20500101",
+        end_date: str = "22220101",
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
@@ -409,7 +409,7 @@ class AkShareClient:
         symbol: str,
         period: str = "daily",
         start_date: str = "20200101",
-        end_date: str = "20500101",
+        end_date: str = "22220101",
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
@@ -417,9 +417,9 @@ class AkShareClient:
 
         Args:
             symbol: 股票代码
-            period: 周期（daily/weekly）
+            period: 周期（daily/weekly/monthly）
             start_date: 开始日期（YYYYMMDD）
-            end_date: 结束日期（YYYYMMDD）
+            end_date: 结束日期（YYYYMMDD），默认 "22220101"
             adjust: 复权类型（qfq/hfq/空字符串）
             ttl: 缓存 TTL（秒）
 

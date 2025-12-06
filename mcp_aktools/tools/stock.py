@@ -148,7 +148,7 @@ def stock_prices(
     symbol: str = field_symbol,
     market: str = field_market,
     period: str = Field(
-        "daily", description="周期，如: daily(日线), weekly(周线，不支持美股)"
+        "daily", description="周期，如: daily(日线), weekly(周线), monthly(月线，不支持美股)"
     ),
     limit: int = Field(30, description="返回数量(int)", strict=False),
 ) -> str:
@@ -159,7 +159,7 @@ def stock_prices(
     Args:
         symbol: 股票代码
         market: 市场类型（sh/sz/hk/us）
-        period: 周期（daily/weekly）
+        period: 周期（daily/weekly/monthly）
         limit: 返回数量
 
     Returns:
@@ -177,7 +177,10 @@ def stock_prices(
         )
 
         # 计算开始日期
-        if period == "weekly":
+        if period == "monthly":
+            # 月线数据需要更长的时间范围
+            delta = {"days": (limit + 12) * 31}  # 约 limit+12 个月
+        elif period == "weekly":
             delta = {"weeks": limit + 62}
         else:
             delta = {"days": limit + 62}
@@ -737,7 +740,7 @@ def _stock_us_daily(
     )
     dfs["换手率"] = None
     dfs.index = pd.to_datetime(dfs["日期"], errors="coerce")
-    return dfs[start_date:"2222-01-01"]
+    return dfs[start_date:"2222-01-01"]  # 使用与 AkShare 文档一致的默认结束日期
 
 
 def _fund_etf_hist_sina(

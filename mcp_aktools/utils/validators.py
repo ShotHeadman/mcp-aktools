@@ -19,8 +19,8 @@ class Validators:
     # 有效的市场类型
     VALID_MARKETS: List[str] = ["sh", "sz", "hk", "us"]
 
-    # 股票数据的有效周期类型
-    VALID_PERIODS: List[str] = ["daily", "weekly"]
+    # 股票数据的有效周期类型（daily/weekly/monthly）
+    VALID_PERIODS: List[str] = ["daily", "weekly", "monthly"]
 
     # 加密货币数据的有效K线/蜡烛图间隔
     VALID_CRYPTO_BARS: List[str] = [
@@ -87,6 +87,8 @@ class Validators:
             >>> Validators.validate_period("daily")
             'daily'
             >>> Validators.validate_period("monthly")
+            'monthly'
+            >>> Validators.validate_period("invalid")
             ValidationException: Validation error for 'period': ...
         """
         if period not in Validators.VALID_PERIODS:
