@@ -410,3 +410,148 @@ def stock_sector_fund_flow_rank(
     except Exception as e:
         logger.error(f"获取资金流数据失败: {e}", exc_info=True)
         return f"获取失败: {str(e)}"
+
+
+def stock_zh_a_spot_em(
+    limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
+) -> str:
+    """获取 A 股实时行情数据。
+
+    从东方财富获取全市场 A 股实时行情数据，包括股票代码、名称、
+    最新价、涨跌幅、成交量、成交额等信息。
+
+    Args:
+        limit: 返回数量，范围 30-100
+
+    Returns:
+        str: CSV 格式的实时行情数据
+
+    Raises:
+        ValidationException: 当参数验证失败时
+
+    Example:
+        >>> result = stock_zh_a_spot_em(50)
+        >>> print(result)
+        代码,名称,最新价,涨跌幅,成交量,成交额
+        000001,平安银行,10.50,1.23,1234567,12345678.00
+    """
+    logger.info(f"获取A股实时行情: limit={limit}")
+
+    try:
+        # 验证参数
+        Validators.validate_limit(limit, min_val=30, max_val=100)
+
+        # 获取实时行情数据，使用 60 秒 TTL 缓存
+        client = _get_akshare_client()
+        dfs = client.call(ak.stock_zh_a_spot_em, ttl=60)
+
+        if dfs is None or dfs.empty:
+            logger.warning("未获取到A股实时行情数据")
+            return "获取实时行情数据失败"
+
+        # 选择关键列（根据东财接口返回的列名）
+        # 东财接口返回列: 序号, 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅, 最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率, 总市值, 流通市值, 涨速, 5分钟涨跌, 60日涨跌幅, 年初至今涨跌幅
+        columns = ['代码', '名称', '最新价', '涨跌幅', '涨跌额', '成交量', '成交额', '振幅', '最高', '最低', '今开', '昨收', '换手率']
+        
+        # 只选择存在的列
+        available_columns = [col for col in columns if col in dfs.columns]
+        if not available_columns:
+            logger.error(f"实时行情数据列名不匹配，实际列名: {list(dfs.columns)}")
+            return "数据格式异常，列名不匹配"
+
+        result_df = dfs[available_columns].head(int(limit))
+
+        # 转换为 CSV 格式
+        result = result_df.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(result_df)} 条A股实时行情数据")
+        return result
+
+    except ValidationException as e:
+        logger.error(f"参数验证失败: {e}")
+        return f"参数错误: {e.message}"
+    except Exception as e:
+        logger.error(f"获取A股实时行情失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"
+
+
+def stock_zt_pool_zbgc_em(
+    date: str = Field(
+        "", description="交易日日期(可选)，默认为最近的交易日，格式: 20251231"
+    ),
+    limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
+) -> str:
+    """获取 A 股炸板股池数据。
+
+    从东方财富获取炸板股池数据，包含曾经涨停但后来打开涨停的股票。
+    炸板股池数据包括股票代码、名称、涨跌幅、炸板次数、涨停统计等信息。
+
+    注意：该接口只能获取最近 30 个交易日的数据。
+
+    Args:
+        date: 交易日日期（可选），默认为最近的交易日，格式: YYYYMMDD
+        limit: 返回数量，范围 30-100
+
+    Returns:
+        str: CSV 格式的炸板股池数据
+
+    Raises:
+        ValidationException: 当参数验证失败时
+
+    Example:
+        >>> result = stock_zt_pool_zbgc_em("20240115", 50)
+        >>> print(result)
+        共10只炸板股
+        代码,名称,涨跌幅,最新价,炸板次数,...
+    """
+    logger.info(f"获取炸板股池: date={date}, limit={limit}")
+
+    try:
+        # 验证参数
+        Validators.validate_limit(limit, min_val=30, max_val=100)
+
+        # 如果没有指定日期，使用最近的交易日
+        if not date:
+            date = _recent_trade_date().strftime("%Y%m%d")
+            logger.debug(f"使用最近交易日: {date}")
+        else:
+            # 验证日期格式
+            Validators.validate_date(date)
+
+        # 获取炸板股池数据，使用 1200 秒 TTL 缓存
+        client = _get_akshare_client()
+        dfs = client.call(ak.stock_zt_pool_zbgc_em, date=date, ttl=1200)
+
+        if dfs is None or dfs.empty:
+            logger.warning(f"未找到炸板股池数据: date={date}")
+            return f"未找到 {date} 的炸板股池数据"
+
+        cnt = len(dfs)
+
+        # 删除不需要的列
+        try:
+            dfs.drop(
+                columns=["序号", "流通市值", "总市值"], inplace=True, errors="ignore"
+            )
+        except Exception as e:
+            logger.debug(f"删除列时出错（可忽略）: {e}")
+
+        # 按成交额降序排序
+        dfs.sort_values("成交额", ascending=False, inplace=True)
+
+        # 限制返回数量
+        dfs = dfs.head(int(limit))
+
+        # 转换为 CSV 格式
+        desc = f"共{cnt}只炸板股\n"
+        result = desc + dfs.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(dfs)} 只炸板股数据")
+        return result
+
+    except ValidationException as e:
+        logger.error(f"参数验证失败: {e}")
+        return f"参数错误: {e.message}"
+    except Exception as e:
+        logger.error(f"获取炸板股池失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"

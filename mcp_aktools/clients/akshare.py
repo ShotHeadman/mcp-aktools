@@ -19,7 +19,7 @@ import pandas as pd
 
 from ..cache import CacheKey
 from ..config import Settings, get_settings
-from ..exceptions import APIException, DataParsingException
+from ..exceptions import APIException, DataParsingException, ValidationException
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +180,36 @@ class AkShareClient:
                         f"达到最大重试次数 ({self.max_retries}), 最后错误: {str(e)}"
                     )
 
+            except KeyError as e:
+                # 数据结构变化导致的 KeyError，记录特定消息并抛出 DataParsingException
+                error_msg = f"数据结构可能已变化，缺少键: {e}"
+                logger.error(
+                    f"AkShare 函数 {func.__name__} 数据结构异常: {error_msg}",
+                    exc_info=True,
+                )
+                raise DataParsingException(
+                    source=f"AkShare.{func.__name__}",
+                    message=error_msg
+                )
+
+            except ValueError as e:
+                # 参数值错误，记录特定消息并抛出 ValidationException
+                error_msg = f"参数值错误: {e}"
+                logger.error(
+                    f"AkShare 函数 {func.__name__} 参数错误: {error_msg}",
+                    exc_info=True,
+                )
+                raise ValidationException(
+                    param_name="unknown",
+                    message=str(e)
+                )
+
             except Exception as e:
-                # 其他异常直接抛出
+                # 其他未知异常，记录完整异常详情并抛出 APIException
                 error_msg = str(e)
                 logger.error(
-                    f"AkShare 函数调用失败: {func.__name__}, " f"错误: {error_msg}",
+                    f"AkShare 函数调用失败: {func.__name__}, "
+                    f"错误类型: {type(e).__name__}, 错误: {error_msg}",
                     exc_info=True,
                 )
                 raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
@@ -264,7 +289,7 @@ class AkShareClient:
         market: str = "sz",
         period: str = "daily",
         start_date: str = "20200101",
-        end_date: str = "20500101",
+        end_date: str = "22220101",
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
@@ -384,7 +409,7 @@ class AkShareClient:
         symbol: str,
         period: str = "daily",
         start_date: str = "20200101",
-        end_date: str = "20500101",
+        end_date: str = "22220101",
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
@@ -392,9 +417,9 @@ class AkShareClient:
 
         Args:
             symbol: 股票代码
-            period: 周期（daily/weekly）
+            period: 周期（daily/weekly/monthly）
             start_date: 开始日期（YYYYMMDD）
-            end_date: 结束日期（YYYYMMDD）
+            end_date: 结束日期（YYYYMMDD），默认 "22220101"
             adjust: 复权类型（qfq/hfq/空字符串）
             ttl: 缓存 TTL（秒）
 
