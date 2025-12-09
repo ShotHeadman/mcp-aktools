@@ -292,21 +292,6 @@ def register_tools(mcp: FastMCP) -> None:
         return market_tools.stock_lhb_ggtj_sina(days=days, limit=limit)
 
     @mcp.tool(
-        title="A股板块资金流",
-        description="获取中国A股市场(上证、深证)的行业资金流向数据",
-    )
-    def stock_sector_fund_flow_rank(
-        days: str = Field(
-            "今日",
-            description="天数，仅支持: {'今日','5日','10日'}，如果需要获取今日数据，请确保是交易日",
-        ),
-        cate: str = Field(
-            "行业资金流", description="仅支持: {'行业资金流','概念资金流','地域资金流'}"
-        ),
-    ):
-        return market_tools.stock_sector_fund_flow_rank(days=days, cate=cate)
-
-    @mcp.tool(
         title="A股实时行情",
         description="获取中国A股市场(上证、深证)的实时行情数据，包括股票代码、名称、最新价、涨跌幅、成交量、成交额等信息",
     )
@@ -314,6 +299,36 @@ def register_tools(mcp: FastMCP) -> None:
         limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
     ):
         return market_tools.stock_zh_a_spot_em(limit=limit)
+
+    @mcp.tool(
+        title="融资融券数据",
+        description="获取中国A股市场(上证、深证)的融资融券数据，包括上海和深圳两市的融资买入额、融资余额、融券余量、融券余额、融资融券余额等信息",
+    )
+    def margin_trading(
+        limit: int = Field(30, description="返回数量(int)，默认30条", strict=False),
+    ):
+        return market_tools.margin_trading(limit=limit)
+
+    @mcp.tool(
+        title="A股指数历史行情",
+        description="获取A股指数历史行情数据，包括上证指数(000001)、深证成指(399001)、创业板指(399006)、沪深300(000300)等。返回OHLCV数据及MACD、KDJ、RSI、BOLL等技术指标",
+    )
+    def index_zh_a_hist(
+        symbol: str = Field(description="指数代码，如 000001(上证指数), 399001(深证成指), 000300(沪深300)"),
+        period: str = Field("daily", description="周期，支持: daily(日线), weekly(周线), monthly(月线)"),
+        limit: int = Field(30, description="返回数量(int)", strict=False),
+    ):
+        return market_tools.index_zh_a_hist(symbol=symbol, period=period, limit=limit)
+
+    @mcp.tool(
+        title="个股资金流向历史",
+        description="获取单个股票的历史资金流向数据，包括主力净流入、超大单净流入、大单净流入、中单净流入、小单净流入等信息",
+    )
+    def stock_individual_fund_flow(
+        symbol: str = field_symbol,
+        market: str = Field("sh", description="股票市场，仅支持: sh(上证), sz(深证)"),
+    ):
+        return market_tools.stock_individual_fund_flow(symbol=symbol, market=market)
 
     # ========== 新闻工具 ==========
 
