@@ -1,7 +1,7 @@
 """
 技术指标计算模块
 
-提供常用的技术指标计算功能，包括 MACD、KDJ、RSI、BOLL 等。
+提供常用的技术指标计算功能，包括 MACD、KDJ、RSI、BOLL、MA均线系统等。
 所有函数都包含完整的类型注解。
 
 所有指标均使用 pandas-ta 专业库计算，确保与主流行情软件保持一致：
@@ -9,9 +9,10 @@
 - KDJ: 使用 ta.kdj() 计算，采用传统中国市场算法
 - RSI: 使用 ta.rsi() 计算
 - BOLL: 使用 ta.bbands() 计算布林带
+- MA: 使用 ta.sma() 计算简单移动平均线
 """
 
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 
@@ -227,6 +228,30 @@ def calculate_boll(
     return upper, middle, lower
 
 
+def calculate_ma(close: pd.Series, period: int) -> pd.Series:
+    """
+    计算简单移动平均线 (Simple Moving Average)
+
+    使用 pandas-ta 库计算 SMA 指标。
+
+    Args:
+        close: 收盘价序列
+        period: 移动平均周期
+
+    Returns:
+        pd.Series: MA 值
+    """
+    if ta is None:
+        raise ImportError(
+            "pandas-ta is required. Install it with: pip install pandas-ta"
+        )
+
+    sma = ta.sma(close, length=period)
+    if sma is None:
+        return pd.Series([None] * len(close), index=close.index)
+    return sma
+
+
 def add_technical_indicators(
     df: pd.DataFrame,
     close: pd.Series,
@@ -236,6 +261,8 @@ def add_technical_indicators(
     kdj_params: Tuple[int, int, int] = (9, 3, 3),
     rsi_period: int = 14,
     boll_params: Tuple[int, float] = (20, 2.0),
+    ma_periods: Optional[List[int]] = None,
+    include_trend: bool = False,
 ) -> None:
     """
     向 DataFrame 添加所有技术指标
@@ -253,6 +280,10 @@ def add_technical_indicators(
         kdj_params: KDJ 参数 (period, k_smooth, d_smooth)，默认 (9, 3, 3)
         rsi_period: RSI 周期，默认 14
         boll_params: BOLL 参数 (period, std_dev)，默认 (20, 2.0)
+        ma_periods: 均线周期列表，传入后会计算对应周期的MA均线
+            - 常用均线: [5, 10, 20, 30, 60, 120, 250]
+            - 斐波那契均线: [5, 8, 13, 21, 34, 55, 89, 144, 233]
+        include_trend: 是否包含趋势指标 (ADX, 线性回归)，默认 False
 
     Returns:
         None: 函数直接修改传入的 DataFrame
@@ -262,6 +293,9 @@ def add_technical_indicators(
         - KDJ.K, KDJ.D, KDJ.J: KDJ 指标
         - RSI: RSI 指标
         - BOLL.U, BOLL.M, BOLL.L: 布林带指标（上轨、中轨、下轨）
+        - MA{period}: 均线（根据 ma_periods 参数）
+        - ADX, DI+, DI-, TREND: 趋势指标（可选）
+        - LINREG, SLOPE: 线性回归指标（可选）
 
     Example:
         >>> df = pd.DataFrame({
@@ -293,3 +327,40 @@ def add_technical_indicators(
     df["BOLL.U"] = upper
     df["BOLL.M"] = middle
     df["BOLL.L"] = lower
+
+    # === 均线系统 ===
+    if ma_periods:
+        for p in ma_periods:
+            ma = calculate_ma(close, p)
+            df[f"MA{p}"] = ma
+
+    # === 趋势指标 ===
+    if include_trend:
+        # 创建临时 DataFrame 用于 pandas-ta 计算
+        temp_df = pd.DataFrame({
+            'open': close,
+            'high': high,
+            'low': low,
+            'close': close,
+        }, index=df.index)
+
+        # ADX
+        adx_result = temp_df.ta.adx(length=14)
+        if adx_result is not None:
+            df["ADX"] = adx_result.iloc[:, 0]
+            df["DI+"] = adx_result.iloc[:, 1]
+            df["DI-"] = adx_result.iloc[:, 2]
+            # 趋势方向: ADX>25 且 DI+>DI- 为上升，反之为下降
+            df["TREND"] = 0
+            strong = adx_result.iloc[:, 0] > 25
+            df.loc[strong & (adx_result.iloc[:, 1] > adx_result.iloc[:, 2]), "TREND"] = 1
+            df.loc[strong & (adx_result.iloc[:, 2] > adx_result.iloc[:, 1]), "TREND"] = -1
+
+        # 线性回归
+        linreg = ta.linreg(close, length=14)
+        if linreg is not None:
+            df["LINREG"] = linreg
+
+        slope = ta.linreg(close, length=14, slope=True)
+        if slope is not None:
+            df["SLOPE"] = slope

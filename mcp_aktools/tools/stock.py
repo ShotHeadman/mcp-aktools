@@ -151,6 +151,8 @@ def stock_prices(
         "daily", description="周期，如: daily(日线), weekly(周线), monthly(月线，不支持美股)"
     ),
     limit: int = Field(30, description="返回数量(int)", strict=False),
+    ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
+    include_trend: bool = Field(False, description="是否包含趋势指标(ADX/DI+/DI-/TREND/LINREG/SLOPE)"),
 ) -> str:
     """根据股票代码和市场获取股票历史价格及技术指标。
 
@@ -161,6 +163,8 @@ def stock_prices(
         market: 市场类型（sh/sz/hk/us）
         period: 周期（daily/weekly/monthly）
         limit: 返回数量
+        ma_periods: 均线周期列表，逗号分隔
+        include_trend: 是否包含趋势指标
 
     Returns:
         str: CSV 格式的价格和技术指标数据
@@ -172,8 +176,17 @@ def stock_prices(
         Validators.validate_period(period)
         Validators.validate_limit(limit, min_val=1, max_val=300)
 
+        # 解析均线周期
+        parsed_ma_periods = None
+        if ma_periods and ma_periods.strip():
+            try:
+                parsed_ma_periods = [int(p.strip()) for p in ma_periods.split(",") if p.strip()]
+            except ValueError:
+                return "参数错误: ma_periods 格式不正确，应为逗号分隔的数字，如: 5,10,20,30,60"
+
         logger.info(
-            f"获取股票价格: symbol={symbol}, market={market}, period={period}, limit={limit}"
+            f"获取股票价格: symbol={symbol}, market={market}, period={period}, limit={limit}, "
+            f"ma_periods={parsed_ma_periods}, include_trend={include_trend}"
         )
 
         # 计算开始日期
@@ -233,7 +246,11 @@ def stock_prices(
                     logger.warning(f"OHLC 数据验证警告 ({symbol}.{market}): {warning}")
 
             # 添加技术指标
-            add_technical_indicators(dfs, dfs["收盘"], dfs["最低"], dfs["最高"])
+            add_technical_indicators(
+                dfs, dfs["收盘"], dfs["最低"], dfs["最高"],
+                ma_periods=parsed_ma_periods,
+                include_trend=include_trend,
+            )
 
             # 选择要返回的列
             columns = [
@@ -255,6 +272,15 @@ def stock_prices(
                 "BOLL.M",
                 "BOLL.L",
             ]
+            
+            # 添加均线列
+            if parsed_ma_periods:
+                for p in parsed_ma_periods:
+                    columns.append(f"MA{p}")
+            
+            # 添加趋势指标列
+            if include_trend:
+                columns.extend(["ADX", "DI+", "DI-", "TREND", "LINREG", "SLOPE"])
 
             # 转换为 CSV 格式
             all_lines = (
