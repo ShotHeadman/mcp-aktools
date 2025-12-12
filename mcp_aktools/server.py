@@ -104,7 +104,7 @@ def register_tools(mcp: FastMCP) -> None:
         "此接口用于获取日线(daily)或周线(weekly)数据，不适用于分钟级别数据。"
         "如需分钟级别的分时数据，请使用 stock_zh_a_minute 接口。不支持加密货币。"
         "可通过ma_periods添加均线系统，如常用均线5,10,20,30,60,120,250或斐波那契均线5,8,13,21,34,55,89,144,233。"
-        "可通过include_trend添加趋势指标(ADX/DI+/DI-/TREND/LINREG/SLOPE)。",
+        "可通过include_trend添加趋势指标(BBI/TREND/LINREG/SLOPE)。",
     )
     def stock_prices(
         symbol: str = field_symbol,
@@ -114,7 +114,7 @@ def register_tools(mcp: FastMCP) -> None:
         ),
         limit: int = Field(30, description="返回数量(int)", strict=False),
         ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
-        include_trend: bool = Field(False, description="是否包含趋势指标(ADX/DI+/DI-/TREND/LINREG/SLOPE)"),
+        include_trend: bool = Field(False, description="是否包含趋势指标(BBI/TREND/LINREG/SLOPE)"),
     ):
         return stock_tools.stock_prices(
             symbol=symbol, market=market, period=period, limit=limit,

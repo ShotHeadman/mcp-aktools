@@ -152,7 +152,7 @@ def stock_prices(
     ),
     limit: int = Field(30, description="返回数量(int)", strict=False),
     ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
-    include_trend: bool = Field(False, description="是否包含趋势指标(ADX/DI+/DI-/TREND/LINREG/SLOPE)"),
+    include_trend: bool = Field(False, description="是否包含趋势指标(BBI/TREND/LINREG/SLOPE)"),
 ) -> str:
     """根据股票代码和市场获取股票历史价格及技术指标。
 
@@ -280,7 +280,7 @@ def stock_prices(
             
             # 添加趋势指标列
             if include_trend:
-                columns.extend(["ADX", "DI+", "DI-", "TREND", "LINREG", "SLOPE"])
+                columns.extend(["BBI", "TREND", "LINREG", "SLOPE"])
 
             # 转换为 CSV 格式
             all_lines = (

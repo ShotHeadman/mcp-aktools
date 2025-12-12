@@ -294,7 +294,7 @@ def add_technical_indicators(
         - RSI: RSI 指标
         - BOLL.U, BOLL.M, BOLL.L: 布林带指标（上轨、中轨、下轨）
         - MA{period}: 均线（根据 ma_periods 参数）
-        - ADX, DI+, DI-, TREND: 趋势指标（可选）
+        - BBI, TREND: 多空趋势指标（可选）
         - LINREG, SLOPE: 线性回归指标（可选）
 
     Example:
@@ -336,25 +336,19 @@ def add_technical_indicators(
 
     # === 趋势指标 ===
     if include_trend:
-        # 创建临时 DataFrame 用于 pandas-ta 计算
-        temp_df = pd.DataFrame({
-            'open': close,
-            'high': high,
-            'low': low,
-            'close': close,
-        }, index=df.index)
-
-        # ADX
-        adx_result = temp_df.ta.adx(length=14)
-        if adx_result is not None:
-            df["ADX"] = adx_result.iloc[:, 0]
-            df["DI+"] = adx_result.iloc[:, 1]
-            df["DI-"] = adx_result.iloc[:, 2]
-            # 趋势方向: ADX>25 且 DI+>DI- 为上升，反之为下降
+        # BBI (Bull and Bear Index) - 多空指标
+        # BBI = (MA3 + MA6 + MA12 + MA24) / 4
+        ma3 = ta.sma(close, length=3)
+        ma6 = ta.sma(close, length=6)
+        ma12 = ta.sma(close, length=12)
+        ma24 = ta.sma(close, length=24)
+        
+        if all(x is not None for x in [ma3, ma6, ma12, ma24]):
+            df["BBI"] = (ma3 + ma6 + ma12 + ma24) / 4
+            # 趋势方向: 收盘价 > BBI 为上升趋势(1)，收盘价 < BBI 为下降趋势(-1)
             df["TREND"] = 0
-            strong = adx_result.iloc[:, 0] > 25
-            df.loc[strong & (adx_result.iloc[:, 1] > adx_result.iloc[:, 2]), "TREND"] = 1
-            df.loc[strong & (adx_result.iloc[:, 2] > adx_result.iloc[:, 1]), "TREND"] = -1
+            df.loc[close > df["BBI"], "TREND"] = 1
+            df.loc[close < df["BBI"], "TREND"] = -1
 
         # 线性回归
         linreg = ta.linreg(close, length=14)
