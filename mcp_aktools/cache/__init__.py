@@ -12,6 +12,15 @@
 # 我们使用 __import__ 和 fromlist 来获取实际的模块，而不是包
 import sys
 
+# Import SQLiteCacheBackend from the new module
+from mcp_aktools.cache.sqlite_backend import SQLiteCacheBackend
+from mcp_aktools.cache.serialization import (
+    serialize_dataframe,
+    deserialize_dataframe,
+    CacheSerializationError,
+)
+from mcp_aktools.cache.dividend_checker import DividendChecker, DEFAULT_DIVIDEND_TTL
+
 cache_module = sys.modules.get("mcp_aktools.cache")
 if cache_module and hasattr(cache_module, "CacheKey"):
     # 如果已导入，使用它
@@ -35,4 +44,12 @@ else:
         # 如果导入失败则回退
         CacheKey = None
 
-__all__ = ["CacheKey"]
+__all__ = [
+    "CacheKey",
+    "SQLiteCacheBackend",
+    "serialize_dataframe",
+    "deserialize_dataframe",
+    "CacheSerializationError",
+    "DividendChecker",
+    "DEFAULT_DIVIDEND_TTL",
+]

@@ -2,9 +2,10 @@
 
 import os
 import urllib.request
+from pathlib import Path
 from typing import Dict, Optional
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -40,6 +41,9 @@ class Settings(BaseSettings):
     cache_disk_ttl: int = 1200
     cache_max_size: int = 100
 
+    # SQLite 数据库缓存配置
+    database_url: Optional[str] = None
+
     # 日志配置
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -58,6 +62,49 @@ class Settings(BaseSettings):
 
     # 交易规则配置
     trading_rule_file: Optional[str] = None
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def set_default_database_url(cls, v: Optional[str]) -> Optional[str]:
+        """Set default database URL if not provided.
+        
+        Uses the user's cache directory as the default location.
+        """
+        if v is not None:
+            return v
+        # Return None here, actual default will be computed in get_database_path()
+        return None
+
+    def get_database_path(self) -> str:
+        """Get the database file path.
+        
+        If database_url is set, returns that path.
+        Otherwise, returns a default path in the user's cache directory.
+        
+        Returns:
+            str: The database file path
+        """
+        if self.database_url:
+            return self.database_url
+        
+        # Use user's cache directory as default
+        # On Windows: C:\\Users\\<user>\\AppData\\Local\\mcp-aktools\\cache
+        # On macOS: ~/Library/Caches/mcp-aktools
+        # On Linux: ~/.cache/mcp-aktools
+        if os.name == "nt":
+            # Windows
+            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        elif os.name == "posix" and os.uname().sysname == "Darwin":
+            # macOS
+            cache_dir = Path.home() / "Library" / "Caches"
+        else:
+            # Linux and other Unix-like systems
+            cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        
+        db_dir = cache_dir / "mcp-aktools"
+        db_path = db_dir / "cache.db"
+        
+        return str(db_path)
 
     def __init__(self, **kwargs):
         """初始化配置，支持从多个环境变量源读取代理配置。"""
