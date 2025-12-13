@@ -44,7 +44,25 @@ class AkShareClient:
         self.max_retries = self.settings.retry_max_attempts
         self.retry_backoff_factor = self.settings.retry_backoff_factor
         self.retry_max_delay = self.settings.retry_max_delay
+        
+        # Initialize SQLite cache backend (Requirements 1.1, 1.2)
+        self._init_sqlite_backend()
+        
         logger.info("AkShare 客户端已初始化")
+
+    def _init_sqlite_backend(self) -> None:
+        """Initialize SQLite cache backend with database path from settings.
+        
+        This method initializes the SQLite cache backend singleton using the
+        database path configured in settings. If DATABASE_URL is not set,
+        a default path in the user's cache directory will be used.
+        """
+        try:
+            db_path = self.settings.get_database_path()
+            CacheKey.init_sqlite_backend(db_path)
+            logger.debug(f"SQLite cache backend initialized with path: {db_path}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize SQLite cache backend: {e}. Falling back to memory-only cache.")
 
     def call(
         self,
@@ -283,6 +301,34 @@ class AkShareClient:
                 logger.error(f"雪球备用接口也失败: {fallback_error}")
             raise e  # 抛出原始异常
 
+    def _check_dividend_invalidation(self, symbol: str) -> bool:
+        """Check for new dividends and invalidate cache if needed.
+        
+        This method checks if there's a new ex-dividend date for the stock
+        and invalidates the cached price data if a new dividend is detected.
+        
+        Args:
+            symbol: Stock symbol (e.g., '000001')
+            
+        Returns:
+            True if cache was invalidated, False otherwise.
+        """
+        dividend_checker = CacheKey.get_dividend_checker()
+        if dividend_checker is None:
+            return False
+        
+        try:
+            if dividend_checker.should_invalidate_cache(symbol):
+                logger.info(f"New dividend detected for {symbol}, invalidating price cache")
+                dividend_checker.invalidate_stock_cache(symbol)
+                # Also clear memory cache entries for this symbol
+                CacheKey.clear_by_symbol(symbol)
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to check dividend for {symbol}: {e}")
+        
+        return False
+
     def stock_zh_a_hist(
         self,
         symbol: str,
@@ -307,6 +353,11 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
+        # Check for new dividends before returning cached price data (Requirements 4.1, 4.3)
+        # Only check for adjusted price data (qfq/hfq) as raw prices are not affected
+        if adjust in ("qfq", "hfq"):
+            self._check_dividend_invalidation(symbol)
+        
         try:
             return self.call(
                 ak.stock_zh_a_hist,

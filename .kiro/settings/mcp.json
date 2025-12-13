@@ -1,14 +1,14 @@
 {
   "mcpServers": {
     "mcp-aktools": {
-      "command": "/home/doublechu/Documents/mcp-aktools/.venv/bin/python",
+      "command": "E:\\PycharmProjects\\mcp-aktools\\.venv\\Scripts\\python.exe",
       "args": [
         "-m",
         "mcp_aktools"
       ],
-      "env": {
-        "TRADING_RULE_FILE": "/home/doublechu/Documents/mcp-aktools/trading_rules.md"
-      },
+      // "env": {
+      //   "TRADING_RULE_FILE": "/home/doublechu/Documents/mcp-aktools/trading_rules.md"
+      // },
       "disabled": false,
       "autoApprove": [
         "search",

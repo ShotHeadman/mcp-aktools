@@ -47,20 +47,15 @@ class SQLiteCacheBackend:
         logger.debug(f"SQLite cache backend initialized at: {self.db_path}")
     
     def _get_default_db_path(self) -> str:
-        """Get default database path in user's cache directory.
+        """Get default database path in project's data directory.
         
         Returns:
-            str: Default database file path.
+            str: Default database file path (data/stock_data.db).
         """
-        if os.name == "nt":
-            # Windows
-            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        else:
-            # Linux and other Unix-like systems
-            cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        
-        db_dir = cache_dir / "mcp-aktools"
-        return str(db_dir / "cache.db")
+        # Get the project root directory (where mcp_aktools package is located)
+        package_dir = Path(__file__).parent.parent.parent
+        db_dir = package_dir / "data"
+        return str(db_dir / "stock_data.db")
 
     def _ensure_db_directory(self) -> None:
         """Ensure the database directory exists."""
