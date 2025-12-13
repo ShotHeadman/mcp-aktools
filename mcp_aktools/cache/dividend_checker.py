@@ -1,7 +1,7 @@
-"""Dividend checker for cache invalidation.
+"""分红检查器，用于缓存失效处理。
 
-This module provides functionality to check for corporate actions (dividends)
-and invalidate cached price data when new ex-dividend dates are detected.
+此模块提供检查公司行为（分红）的功能，
+当检测到新的除权除息日时，使缓存的价格数据失效。
 """
 
 import logging
@@ -15,20 +15,20 @@ from mcp_aktools.cache.sqlite_backend import SQLiteCacheBackend
 
 logger = logging.getLogger(__name__)
 
-# Default TTL for dividend data cache (24 hours in seconds)
+# 分红数据缓存的默认 TTL（24 小时，单位：秒）
 DEFAULT_DIVIDEND_TTL = 86400
 
 
 class DividendChecker:
-    """Dividend checker for detecting ex-dividend events and triggering cache invalidation.
+    """分红检查器，用于检测除权除息事件并触发缓存失效。
     
-    This class monitors dividend events for stocks and invalidates cached price data
-    when new ex-dividend dates are detected. Dividend data itself is cached with a
-    24-hour TTL to minimize API calls.
+    此类监控股票的分红事件，当检测到新的除权除息日时，
+    使缓存的价格数据失效。分红数据本身以 24 小时 TTL 缓存，
+    以减少 API 调用次数。
     
-    Attributes:
-        cache_backend: SQLite cache backend for storing dividend records.
-        ttl: TTL for dividend data cache in seconds (default: 24 hours).
+    属性:
+        cache_backend: 用于存储分红记录的 SQLite 缓存后端。
+        ttl: 分红数据缓存的 TTL，单位为秒（默认：24 小时）。
     """
     
     def __init__(
@@ -36,72 +36,72 @@ class DividendChecker:
         cache_backend: SQLiteCacheBackend, 
         ttl: int = DEFAULT_DIVIDEND_TTL
     ):
-        """Initialize dividend checker.
+        """初始化分红检查器。
         
-        Args:
-            cache_backend: SQLite cache backend instance.
-            ttl: TTL for dividend data cache in seconds (default: 86400 = 24 hours).
+        参数:
+            cache_backend: SQLite 缓存后端实例。
+            ttl: 分红数据缓存的 TTL，单位为秒（默认：86400 = 24 小时）。
         """
         self.cache_backend = cache_backend
         self.ttl = ttl
-        logger.debug(f"DividendChecker initialized with TTL={ttl}s")
-    
+        logger.debug(f"DividendChecker 已初始化，TTL={ttl}s")
+
     def _get_dividend_cache_key(self, symbol: str) -> str:
-        """Generate cache key for dividend data.
+        """生成分红数据的缓存键。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            Cache key string.
+        返回:
+            缓存键字符串。
         """
         return f"dividend_check:{symbol}"
     
     def _is_cache_expired(self, created_at: datetime) -> bool:
-        """Check if cached dividend data has expired.
+        """检查缓存的分红数据是否已过期。
         
-        Args:
-            created_at: Timestamp when the cache entry was created.
+        参数:
+            created_at: 缓存条目创建时的时间戳。
             
-        Returns:
-            True if cache has expired, False otherwise.
+        返回:
+            如果缓存已过期返回 True，否则返回 False。
         """
         expiry_time = created_at + timedelta(seconds=self.ttl)
         return datetime.now() > expiry_time
 
     def get_latest_ex_dividend_date(self, symbol: str) -> Optional[datetime]:
-        """Get the latest ex-dividend date for a stock.
+        """获取股票的最新除权除息日。
         
-        This method first checks the cache for dividend data. If the cache is
-        expired or missing, it fetches fresh data from the AkShare API using
-        stock_history_dividend_detail(symbol, indicator='分红').
+        此方法首先检查缓存中的分红数据。如果缓存已过期或不存在，
+        则使用 stock_history_dividend_detail(symbol, indicator='分红')
+        从 AkShare API 获取最新数据。
         
-        Args:
-            symbol: Stock symbol (e.g., '000001' for 平安银行).
+        参数:
+            symbol: 股票代码（如 '000001' 代表平安银行）。
             
-        Returns:
-            The latest ex-dividend date as datetime, or None if no dividend records exist.
+        返回:
+            最新除权除息日的 datetime 对象，如果没有分红记录则返回 None。
         """
         cache_key = self._get_dividend_cache_key(symbol)
         
-        # Try to get from cache first
+        # 首先尝试从缓存获取
         cached_data = self._get_cached_dividend_data(symbol)
         if cached_data is not None:
             return cached_data
         
-        # Cache miss or expired, fetch from API
+        # 缓存未命中或已过期，从 API 获取
         try:
-            logger.info(f"Fetching dividend data from API for symbol: {symbol}")
+            logger.info(f"正在从 API 获取股票 {symbol} 的分红数据")
             df = ak.stock_history_dividend_detail(symbol=symbol, indicator="分红")
             
             if df is None or df.empty:
-                logger.debug(f"No dividend records found for symbol: {symbol}")
-                # Cache the "no dividend" result to avoid repeated API calls
+                logger.debug(f"未找到股票 {symbol} 的分红记录")
+                # 缓存"无分红"结果以避免重复 API 调用
                 self._cache_dividend_result(symbol, None)
                 return None
             
-            # Find the latest ex-dividend date (除权除息日)
-            # The column name may vary, common names: '除权除息日', '除息日'
+            # 查找最新的除权除息日
+            # 列名可能有所不同，常见名称：'除权除息日'、'除息日'
             ex_div_date_col = None
             for col in ['除权除息日', '除息日', 'ex_dividend_date']:
                 if col in df.columns:
@@ -109,45 +109,45 @@ class DividendChecker:
                     break
             
             if ex_div_date_col is None:
-                logger.warning(f"Could not find ex-dividend date column in dividend data for {symbol}")
-                logger.debug(f"Available columns: {df.columns.tolist()}")
+                logger.warning(f"无法在股票 {symbol} 的分红数据中找到除权除息日列")
+                logger.debug(f"可用列: {df.columns.tolist()}")
                 self._cache_dividend_result(symbol, None)
                 return None
             
-            # Parse dates and find the latest one
+            # 解析日期并找到最新的
             df[ex_div_date_col] = pd.to_datetime(df[ex_div_date_col], errors='coerce')
             valid_dates = df[ex_div_date_col].dropna()
             
             if valid_dates.empty:
-                logger.debug(f"No valid ex-dividend dates found for symbol: {symbol}")
+                logger.debug(f"未找到股票 {symbol} 的有效除权除息日")
                 self._cache_dividend_result(symbol, None)
                 return None
             
             latest_date = valid_dates.max()
             latest_date_dt = latest_date.to_pydatetime() if hasattr(latest_date, 'to_pydatetime') else latest_date
             
-            logger.debug(f"Latest ex-dividend date for {symbol}: {latest_date_dt}")
+            logger.debug(f"股票 {symbol} 的最新除权除息日: {latest_date_dt}")
             
-            # Cache the result
+            # 缓存结果
             self._cache_dividend_result(symbol, latest_date_dt)
             
-            # Store in dividend_records table for tracking
+            # 存储到 dividend_records 表以便追踪
             self._store_dividend_record(symbol, latest_date_dt)
             
             return latest_date_dt
             
         except Exception as e:
-            logger.error(f"Failed to fetch dividend data for {symbol}: {e}", exc_info=True)
+            logger.error(f"获取股票 {symbol} 的分红数据失败: {e}", exc_info=True)
             return None
-    
+
     def _get_cached_dividend_data(self, symbol: str) -> Optional[datetime]:
-        """Get cached dividend data if not expired.
+        """获取未过期的缓存分红数据。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            Cached ex-dividend date if valid, None otherwise.
+        返回:
+            如果缓存有效则返回缓存的除权除息日，否则返回 None。
         """
         cache_key = self._get_dividend_cache_key(symbol)
         
@@ -167,12 +167,12 @@ class DividendChecker:
             data, created_at_str = row
             created_at = datetime.fromisoformat(created_at_str) if isinstance(created_at_str, str) else created_at_str
             
-            # Check if cache has expired
+            # 检查缓存是否已过期
             if self._is_cache_expired(created_at):
-                logger.debug(f"Dividend cache expired for {symbol}")
+                logger.debug(f"股票 {symbol} 的分红缓存已过期")
                 return None
             
-            # Decode the cached date
+            # 解码缓存的日期
             if data == b'none':
                 return None
             
@@ -180,20 +180,20 @@ class DividendChecker:
             return datetime.fromisoformat(date_str)
             
         except Exception as e:
-            logger.error(f"Failed to get cached dividend data for {symbol}: {e}", exc_info=True)
+            logger.error(f"获取股票 {symbol} 的缓存分红数据失败: {e}", exc_info=True)
             return None
 
     def _cache_dividend_result(self, symbol: str, ex_dividend_date: Optional[datetime]) -> None:
-        """Cache dividend check result.
+        """缓存分红检查结果。
         
-        Args:
-            symbol: Stock symbol.
-            ex_dividend_date: The ex-dividend date to cache, or None if no dividend.
+        参数:
+            symbol: 股票代码。
+            ex_dividend_date: 要缓存的除权除息日，如果无分红则为 None。
         """
         cache_key = self._get_dividend_cache_key(symbol)
         
         try:
-            # Encode the date as bytes
+            # 将日期编码为字节
             if ex_dividend_date is None:
                 data = b'none'
             else:
@@ -205,17 +205,17 @@ class DividendChecker:
                 data_type='dividend',
                 symbol=symbol
             )
-            logger.debug(f"Cached dividend result for {symbol}: {ex_dividend_date}")
+            logger.debug(f"已缓存股票 {symbol} 的分红结果: {ex_dividend_date}")
             
         except Exception as e:
-            logger.error(f"Failed to cache dividend result for {symbol}: {e}", exc_info=True)
+            logger.error(f"缓存股票 {symbol} 的分红结果失败: {e}", exc_info=True)
     
     def _store_dividend_record(self, symbol: str, ex_dividend_date: datetime) -> None:
-        """Store dividend record in the dividend_records table.
+        """将分红记录存储到 dividend_records 表。
         
-        Args:
-            symbol: Stock symbol.
-            ex_dividend_date: The ex-dividend date.
+        参数:
+            symbol: 股票代码。
+            ex_dividend_date: 除权除息日。
         """
         try:
             conn = self.cache_backend._get_connection()
@@ -227,19 +227,19 @@ class DividendChecker:
             """, (symbol, ex_dividend_date.date().isoformat(), 'cash'))
             
             conn.commit()
-            logger.debug(f"Stored dividend record for {symbol}: {ex_dividend_date}")
+            logger.debug(f"已存储股票 {symbol} 的分红记录: {ex_dividend_date}")
             
         except Exception as e:
-            logger.error(f"Failed to store dividend record for {symbol}: {e}", exc_info=True)
-    
+            logger.error(f"存储股票 {symbol} 的分红记录失败: {e}", exc_info=True)
+
     def _get_stored_ex_dividend_date(self, symbol: str) -> Optional[datetime]:
-        """Get the previously stored ex-dividend date from dividend_records table.
+        """从 dividend_records 表获取之前存储的除权除息日。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            The stored ex-dividend date, or None if not found.
+        返回:
+            存储的除权除息日，如果未找到则返回 None。
         """
         try:
             conn = self.cache_backend._get_connection()
@@ -256,84 +256,82 @@ class DividendChecker:
             return datetime.fromisoformat(row[0])
             
         except Exception as e:
-            logger.error(f"Failed to get stored ex-dividend date for {symbol}: {e}", exc_info=True)
+            logger.error(f"获取股票 {symbol} 存储的除权除息日失败: {e}", exc_info=True)
             return None
     
     def should_invalidate_cache(self, symbol: str) -> bool:
-        """Check if cache should be invalidated due to new dividend event.
+        """检查是否应因新的分红事件而使缓存失效。
         
-        This method compares the latest ex-dividend date from the API with
-        the previously stored date. If a new (more recent) ex-dividend date
-        is detected, the cache should be invalidated.
+        此方法将 API 返回的最新除权除息日与之前存储的日期进行比较。
+        如果检测到新的（更近的）除权除息日，则应使缓存失效。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            True if cache should be invalidated, False otherwise.
+        返回:
+            如果应使缓存失效返回 True，否则返回 False。
         """
         try:
-            # Get the previously stored ex-dividend date
+            # 获取之前存储的除权除息日
             stored_date = self._get_stored_ex_dividend_date(symbol)
             
-            # Get the latest ex-dividend date from API (may use cache)
+            # 从 API 获取最新的除权除息日（可能使用缓存）
             latest_date = self.get_latest_ex_dividend_date(symbol)
             
             if latest_date is None:
-                # No dividend data, no need to invalidate
+                # 没有分红数据，无需使缓存失效
                 return False
             
             if stored_date is None:
-                # First time seeing dividend data, store it but don't invalidate
-                # (the cache was just populated)
+                # 首次看到分红数据，存储但不使缓存失效
+                # （缓存刚刚被填充）
                 return False
             
-            # Compare dates - invalidate if new date is more recent
+            # 比较日期 - 如果新日期更近则使缓存失效
             if latest_date > stored_date:
                 logger.info(
-                    f"New ex-dividend date detected for {symbol}: "
-                    f"{latest_date} > {stored_date}, cache invalidation required"
+                    f"检测到股票 {symbol} 的新除权除息日: "
+                    f"{latest_date} > {stored_date}，需要使缓存失效"
                 )
                 return True
             
             return False
             
         except Exception as e:
-            logger.error(f"Failed to check cache invalidation for {symbol}: {e}", exc_info=True)
+            logger.error(f"检查股票 {symbol} 的缓存失效状态失败: {e}", exc_info=True)
             return False
     
     def invalidate_stock_cache(self, symbol: str) -> int:
-        """Invalidate all cached price data for a stock.
+        """使股票的所有缓存价格数据失效。
         
-        This method removes all cache entries for the specified stock symbol
-        from the database.
+        此方法从数据库中删除指定股票代码的所有缓存条目。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            Number of deleted cache entries.
+        返回:
+            删除的缓存条目数量。
         """
         try:
             deleted_count = self.cache_backend.delete_by_symbol(symbol)
-            logger.info(f"Invalidated {deleted_count} cache entries for symbol: {symbol}")
+            logger.info(f"已使股票 {symbol} 的 {deleted_count} 条缓存条目失效")
             return deleted_count
             
         except Exception as e:
-            logger.error(f"Failed to invalidate cache for {symbol}: {e}", exc_info=True)
+            logger.error(f"使股票 {symbol} 的缓存失效失败: {e}", exc_info=True)
             return 0
     
     def check_and_invalidate(self, symbol: str) -> bool:
-        """Check for new dividend and invalidate cache if needed.
+        """检查新分红并在需要时使缓存失效。
         
-        This is a convenience method that combines should_invalidate_cache
-        and invalidate_stock_cache.
+        这是一个便捷方法，结合了 should_invalidate_cache
+        和 invalidate_stock_cache 的功能。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            True if cache was invalidated, False otherwise.
+        返回:
+            如果缓存被使失效返回 True，否则返回 False。
         """
         if self.should_invalidate_cache(symbol):
             self.invalidate_stock_cache(symbol)

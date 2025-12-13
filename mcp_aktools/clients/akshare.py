@@ -302,16 +302,16 @@ class AkShareClient:
             raise e  # 抛出原始异常
 
     def _check_dividend_invalidation(self, symbol: str) -> bool:
-        """Check for new dividends and invalidate cache if needed.
+        """检查新分红并在需要时使缓存失效。
         
-        This method checks if there's a new ex-dividend date for the stock
-        and invalidates the cached price data if a new dividend is detected.
+        此方法检查股票是否有新的除权除息日，
+        如果检测到新分红则使缓存的价格数据失效。
         
-        Args:
-            symbol: Stock symbol (e.g., '000001')
+        参数:
+            symbol: 股票代码（如 '000001'）
             
-        Returns:
-            True if cache was invalidated, False otherwise.
+        返回:
+            如果缓存被使失效返回 True，否则返回 False。
         """
         dividend_checker = CacheKey.get_dividend_checker()
         if dividend_checker is None:
@@ -319,13 +319,13 @@ class AkShareClient:
         
         try:
             if dividend_checker.should_invalidate_cache(symbol):
-                logger.info(f"New dividend detected for {symbol}, invalidating price cache")
+                logger.info(f"检测到股票 {symbol} 有新分红，正在使价格缓存失效")
                 dividend_checker.invalidate_stock_cache(symbol)
-                # Also clear memory cache entries for this symbol
+                # 同时清除此股票代码的内存缓存条目
                 CacheKey.clear_by_symbol(symbol)
                 return True
         except Exception as e:
-            logger.warning(f"Failed to check dividend for {symbol}: {e}")
+            logger.warning(f"检查股票 {symbol} 的分红失败: {e}")
         
         return False
 
@@ -353,8 +353,8 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
-        # Check for new dividends before returning cached price data (Requirements 4.1, 4.3)
-        # Only check for adjusted price data (qfq/hfq) as raw prices are not affected
+        # 在返回缓存的价格数据前检查新分红（需求 4.1, 4.3）
+        # 仅对复权价格数据（qfq/hfq）进行检查，因为原始价格不受影响
         if adjust in ("qfq", "hfq"):
             self._check_dividend_invalidation(symbol)
         

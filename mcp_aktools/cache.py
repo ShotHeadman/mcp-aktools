@@ -1,11 +1,11 @@
-"""Cache management module with two-tier caching (Memory + SQLite).
+"""双层缓存管理模块（内存 + SQLite）。
 
-This module provides the CacheKey class that implements a two-tier cache hierarchy:
-1. Memory cache (TTLCache) for fast access
-2. SQLite cache for persistent storage
+此模块提供 CacheKey 类，实现双层缓存层次结构：
+1. 内存缓存（TTLCache）用于快速访问
+2. SQLite 缓存用于持久化存储
 
-Historical stock data is stored permanently in SQLite without expiration.
-Cache invalidation is triggered by corporate actions (dividends).
+历史股票数据永久存储在 SQLite 中，不会过期。
+缓存失效由公司行为（分红）触发。
 """
 
 import logging
@@ -18,7 +18,7 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports to avoid circular dependencies
+# 延迟导入以避免循环依赖
 _SQLiteCacheBackend = None
 _DividendChecker = None
 _serialize_dataframe = None
@@ -27,7 +27,7 @@ _CacheSerializationError = None
 
 
 def _get_sqlite_backend_class():
-    """Lazy import SQLiteCacheBackend to avoid circular imports."""
+    """延迟导入 SQLiteCacheBackend 以避免循环导入。"""
     global _SQLiteCacheBackend
     if _SQLiteCacheBackend is None:
         from mcp_aktools.cache.sqlite_backend import SQLiteCacheBackend
@@ -36,7 +36,7 @@ def _get_sqlite_backend_class():
 
 
 def _get_dividend_checker_class():
-    """Lazy import DividendChecker to avoid circular imports."""
+    """延迟导入 DividendChecker 以避免循环导入。"""
     global _DividendChecker
     if _DividendChecker is None:
         from mcp_aktools.cache.dividend_checker import DividendChecker
@@ -45,7 +45,7 @@ def _get_dividend_checker_class():
 
 
 def _get_serialization_functions():
-    """Lazy import serialization functions to avoid circular imports."""
+    """延迟导入序列化函数以避免循环导入。"""
     global _serialize_dataframe, _deserialize_dataframe, _CacheSerializationError
     if _serialize_dataframe is None:
         from mcp_aktools.cache.serialization import (
@@ -60,18 +60,18 @@ def _get_serialization_functions():
 
 
 class CacheKey:
-    """Cache key management class supporting Memory + SQLite two-tier caching.
+    """支持内存 + SQLite 双层缓存的缓存键管理类。
     
-    This class provides a unified interface for caching data with:
-    - Fast memory cache (TTLCache) for frequently accessed data
-    - Persistent SQLite storage for historical data
-    - Automatic cache invalidation on corporate actions (dividends)
+    此类提供统一的缓存数据接口，具有以下特性：
+    - 快速内存缓存（TTLCache）用于频繁访问的数据
+    - 持久化 SQLite 存储用于历史数据
+    - 公司行为（分红）时自动缓存失效
     
-    Attributes:
-        ALL: Class-level dictionary of all CacheKey instances.
-        _sqlite_backend: Class-level SQLite backend singleton.
-        _dividend_checker: Class-level DividendChecker singleton.
-        _sqlite_initialized: Flag indicating if SQLite backend is initialized.
+    属性:
+        ALL: 类级别的所有 CacheKey 实例字典。
+        _sqlite_backend: 类级别的 SQLite 后端单例。
+        _dividend_checker: 类级别的 DividendChecker 单例。
+        _sqlite_initialized: 标识 SQLite 后端是否已初始化的标志。
     """
     
     ALL: Dict[str, 'CacheKey'] = {}
@@ -80,40 +80,40 @@ class CacheKey:
     _sqlite_initialized: bool = False
 
     def __init__(self, key: str, ttl: int = 600, ttl2: Optional[int] = None, maxsize: int = 100):
-        """Initialize a cache key.
+        """初始化缓存键。
         
-        Args:
-            key: The cache key string.
-            ttl: Memory cache TTL in seconds (default: 600).
-            ttl2: Disk cache TTL in seconds (deprecated, kept for backward compatibility).
-            maxsize: Maximum size of memory cache (default: 100).
+        参数:
+            key: 缓存键字符串。
+            ttl: 内存缓存 TTL，单位为秒（默认：600）。
+            ttl2: 磁盘缓存 TTL，单位为秒（已弃用，保留用于向后兼容）。
+            maxsize: 内存缓存的最大容量（默认：100）。
         """
         self.key = key
         self.ttl = ttl
-        self.ttl2 = ttl2 or (ttl * 2)  # Kept for backward compatibility
+        self.ttl2 = ttl2 or (ttl * 2)  # 保留用于向后兼容
         self.cache1 = TTLCache(maxsize=maxsize, ttl=ttl)
         
-        # Extract symbol from cache key if present (for dividend checking)
+        # 如果存在，从缓存键中提取股票代码（用于分红检查）
         self._symbol = self._extract_symbol_from_key(key)
         
-        # Extract data type from cache key if present
+        # 如果存在，从缓存键中提取数据类型
         self._data_type = self._extract_data_type_from_key(key)
 
     @staticmethod
     def init(key: str, ttl: int = 600, ttl2: Optional[int] = None, maxsize: int = 100) -> 'CacheKey':
-        """Initialize or retrieve a CacheKey instance.
+        """初始化或获取 CacheKey 实例。
         
-        This is a factory method that returns an existing CacheKey if one
-        exists for the given key, or creates a new one.
+        这是一个工厂方法，如果给定键已存在 CacheKey 则返回现有实例，
+        否则创建新实例。
         
-        Args:
-            key: The cache key string.
-            ttl: Memory cache TTL in seconds (default: 600).
-            ttl2: Disk cache TTL in seconds (deprecated, kept for backward compatibility).
-            maxsize: Maximum size of memory cache (default: 100).
+        参数:
+            key: 缓存键字符串。
+            ttl: 内存缓存 TTL，单位为秒（默认：600）。
+            ttl2: 磁盘缓存 TTL，单位为秒（已弃用，保留用于向后兼容）。
+            maxsize: 内存缓存的最大容量（默认：100）。
             
-        Returns:
-            CacheKey instance for the given key.
+        返回:
+            给定键的 CacheKey 实例。
         """
         if key in CacheKey.ALL:
             return CacheKey.ALL[key]
@@ -122,17 +122,16 @@ class CacheKey:
 
     @classmethod
     def init_sqlite_backend(cls, db_path: Optional[str] = None) -> None:
-        """Initialize the SQLite backend singleton.
+        """初始化 SQLite 后端单例。
         
-        This method should be called once during application startup to
-        initialize the SQLite cache backend. If not called, the cache
-        will fall back to memory-only mode.
+        此方法应在应用程序启动时调用一次，以初始化 SQLite 缓存后端。
+        如果未调用，缓存将回退到仅内存模式。
         
-        Args:
-            db_path: Path to the SQLite database file. If None, uses default path.
+        参数:
+            db_path: SQLite 数据库文件路径。如果为 None，则使用默认路径。
         """
         if cls._sqlite_initialized:
-            logger.debug("SQLite backend already initialized")
+            logger.debug("SQLite 后端已初始化")
             return
         
         try:
@@ -143,61 +142,61 @@ class CacheKey:
             cls._dividend_checker = DividendChecker(cls._sqlite_backend)
             cls._sqlite_initialized = True
             
-            logger.info(f"SQLite cache backend initialized at: {cls._sqlite_backend.db_path}")
+            logger.info(f"SQLite 缓存后端已初始化，路径: {cls._sqlite_backend.db_path}")
         except Exception as e:
-            logger.error(f"Failed to initialize SQLite backend: {e}", exc_info=True)
+            logger.error(f"初始化 SQLite 后端失败: {e}", exc_info=True)
             cls._sqlite_backend = None
             cls._dividend_checker = None
             cls._sqlite_initialized = False
 
     @classmethod
     def get_sqlite_backend(cls) -> Optional[Any]:
-        """Get the SQLite backend singleton.
+        """获取 SQLite 后端单例。
         
-        Returns:
-            SQLiteCacheBackend instance or None if not initialized.
+        返回:
+            SQLiteCacheBackend 实例，如果未初始化则返回 None。
         """
         return cls._sqlite_backend
 
     @classmethod
     def get_dividend_checker(cls) -> Optional[Any]:
-        """Get the DividendChecker singleton.
+        """获取 DividendChecker 单例。
         
-        Returns:
-            DividendChecker instance or None if not initialized.
+        返回:
+            DividendChecker 实例，如果未初始化则返回 None。
         """
         return cls._dividend_checker
 
     def _extract_symbol_from_key(self, key: str) -> Optional[str]:
-        """Extract stock symbol from cache key.
+        """从缓存键中提取股票代码。
         
-        Cache keys typically follow patterns like:
+        缓存键通常遵循以下模式：
         - stock_prices:600000:daily
         - stock_info:000001
         
-        Args:
-            key: The cache key string.
+        参数:
+            key: 缓存键字符串。
             
-        Returns:
-            Extracted symbol or None if not found.
+        返回:
+            提取的股票代码，如果未找到则返回 None。
         """
         parts = key.split(':')
         if len(parts) >= 2:
-            # The second part is usually the symbol
+            # 第二部分通常是股票代码
             potential_symbol = parts[1]
-            # Check if it looks like a stock symbol (digits only, 6 chars)
+            # 检查是否看起来像股票代码（仅数字，6 个字符）
             if potential_symbol.isdigit() and len(potential_symbol) == 6:
                 return potential_symbol
         return None
 
     def _extract_data_type_from_key(self, key: str) -> Optional[str]:
-        """Extract data type from cache key.
+        """从缓存键中提取数据类型。
         
-        Args:
-            key: The cache key string.
+        参数:
+            key: 缓存键字符串。
             
-        Returns:
-            Data type string or None if not found.
+        返回:
+            数据类型字符串，如果未找到则返回 None。
         """
         parts = key.split(':')
         if len(parts) >= 1:
@@ -211,87 +210,87 @@ class CacheKey:
         return None
 
     def _is_price_data(self) -> bool:
-        """Check if this cache key is for price data.
+        """检查此缓存键是否用于价格数据。
         
-        Returns:
-            True if this is price data, False otherwise.
+        返回:
+            如果是价格数据返回 True，否则返回 False。
         """
         return self._data_type == 'price'
 
     def get(self) -> Optional[pd.DataFrame]:
-        """Get cached data.
+        """获取缓存数据。
         
-        Implements the two-tier cache lookup:
-        1. Check memory cache first
-        2. If memory miss, check SQLite cache
-        3. If SQLite hit, populate memory cache
-        4. For price data, check for dividend invalidation
+        实现双层缓存查找：
+        1. 首先检查内存缓存
+        2. 如果内存未命中，检查 SQLite 缓存
+        3. 如果 SQLite 命中，填充内存缓存
+        4. 对于价格数据，检查分红失效
         
-        Returns:
-            Cached DataFrame or None if not found.
+        返回:
+            缓存的 DataFrame，如果未找到则返回 None。
         """
-        # Step 1: Check memory cache
+        # 步骤 1：检查内存缓存
         try:
             value = self.cache1[self.key]
-            logger.debug(f"Cache hit (memory): {self.key}")
+            logger.debug(f"缓存命中（内存）: {self.key}")
             return value
         except KeyError:
             pass
 
-        # Step 2: Check SQLite cache if initialized
+        # 步骤 2：如果已初始化，检查 SQLite 缓存
         if CacheKey._sqlite_backend is not None:
             try:
-                # For price data, check if we need to invalidate due to dividend
+                # 对于价格数据，检查是否需要因分红而失效
                 if self._is_price_data() and self._symbol and CacheKey._dividend_checker:
                     if CacheKey._dividend_checker.should_invalidate_cache(self._symbol):
-                        logger.info(f"Cache invalidated due to new dividend for {self._symbol}")
+                        logger.info(f"因股票 {self._symbol} 有新分红，缓存已失效")
                         CacheKey._dividend_checker.invalidate_stock_cache(self._symbol)
-                        # Also clear memory cache for this key
+                        # 同时清除此键的内存缓存
                         self.cache1.pop(self.key, None)
                         return None
                 
-                # Try to get from SQLite
+                # 尝试从 SQLite 获取
                 cached_bytes = CacheKey._sqlite_backend.get(self.key)
                 if cached_bytes is not None:
                     serialize_df, deserialize_df, SerializationError = _get_serialization_functions()
                     try:
                         value = deserialize_df(cached_bytes)
-                        logger.debug(f"Cache hit (SQLite): {self.key}")
+                        logger.debug(f"缓存命中（SQLite）: {self.key}")
                         
-                        # Step 3: Populate memory cache (Requirement 3.3)
+                        # 步骤 3：填充内存缓存（需求 3.3）
                         self.cache1[self.key] = value
-                        logger.debug(f"Memory cache populated from SQLite: {self.key}")
+                        logger.debug(f"已从 SQLite 填充内存缓存: {self.key}")
                         
                         return value
                     except SerializationError as e:
-                        logger.error(f"Failed to deserialize cached data for {self.key}: {e}")
-                        # Delete corrupted cache entry
+                        logger.error(f"反序列化 {self.key} 的缓存数据失败: {e}")
+                        # 删除损坏的缓存条目
                         CacheKey._sqlite_backend.delete(self.key)
                         return None
             except Exception as e:
-                logger.error(f"SQLite cache lookup failed for {self.key}: {e}", exc_info=True)
+                logger.error(f"SQLite 缓存查找 {self.key} 失败: {e}", exc_info=True)
 
-        logger.debug(f"Cache miss: {self.key}")
+        logger.debug(f"缓存未命中: {self.key}")
         return None
 
     def set(self, val: pd.DataFrame) -> pd.DataFrame:
-        """Store data in cache.
+        """将数据存储到缓存中。
         
-        Stores data in both memory cache and SQLite cache (if initialized).
-        This implements Requirement 3.5: dual storage on API fetch.
+        将数据存储到内存缓存和 SQLite 缓存（如果已初始化）。
+        这实现了需求 3.5：API 获取时的双重存储。
         
-        Args:
-            val: DataFrame to cache.
+        参数:
+            val: 要缓存的 DataFrame。
             
-        Returns:
-            The same DataFrame (for chaining).
+        返回:
+            相同的 DataFrame（用于链式调用）。
         """
         try:
-            # Store in memory cache
+            # 存储到内存缓存
             self.cache1[self.key] = val
-            logger.debug(f"Cache set (memory): {self.key} (ttl={self.ttl}s)")
+            logger.debug(f"缓存已设置（内存）: {self.key} (ttl={self.ttl}s)")
             
-            # Store in SQLite cache if initialized (permanent storage)
+            # 如果已初始化，存储到 SQLite 缓存（永久存储）
             if CacheKey._sqlite_backend is not None:
                 try:
                     serialize_df, deserialize_df, SerializationError = _get_serialization_functions()
@@ -302,53 +301,53 @@ class CacheKey:
                         data_type=self._data_type,
                         symbol=self._symbol
                     )
-                    logger.debug(f"Cache set (SQLite): {self.key}")
+                    logger.debug(f"缓存已设置（SQLite）: {self.key}")
                 except Exception as e:
-                    # SQLite write failure should not interrupt operation
-                    logger.error(f"SQLite cache write failed for {self.key}: {e}", exc_info=True)
+                    # SQLite 写入失败不应中断操作
+                    logger.error(f"SQLite 缓存写入 {self.key} 失败: {e}", exc_info=True)
                     
         except Exception as e:
-            # Cache write failure should not interrupt operation
-            logger.error(f"Cache write failed for {self.key}: {e}", exc_info=True)
+            # 缓存写入失败不应中断操作
+            logger.error(f"缓存写入 {self.key} 失败: {e}", exc_info=True)
             
         return val
 
     def delete(self) -> None:
-        """Delete cached data from both memory and SQLite caches.
+        """从内存和 SQLite 缓存中删除缓存数据。
         
-        This implements Requirement 8.3: dual cache clearing.
+        这实现了需求 8.3：双重缓存清除。
         """
         try:
-            # Delete from memory cache
+            # 从内存缓存删除
             self.cache1.pop(self.key, None)
-            logger.debug(f"Cache deleted (memory): {self.key}")
+            logger.debug(f"缓存已删除（内存）: {self.key}")
             
-            # Delete from SQLite cache if initialized
+            # 如果已初始化，从 SQLite 缓存删除
             if CacheKey._sqlite_backend is not None:
                 try:
                     CacheKey._sqlite_backend.delete(self.key)
-                    logger.debug(f"Cache deleted (SQLite): {self.key}")
+                    logger.debug(f"缓存已删除（SQLite）: {self.key}")
                 except Exception as e:
-                    logger.error(f"SQLite cache delete failed for {self.key}: {e}", exc_info=True)
+                    logger.error(f"SQLite 缓存删除 {self.key} 失败: {e}", exc_info=True)
                     
         except Exception as e:
-            logger.error(f"Cache delete failed for {self.key}: {e}", exc_info=True)
+            logger.error(f"缓存删除 {self.key} 失败: {e}", exc_info=True)
 
     @classmethod
     def clear_by_symbol(cls, symbol: str) -> int:
-        """Clear all cache entries for a specific stock symbol.
+        """清除特定股票代码的所有缓存条目。
         
-        This implements Requirement 8.1: selective cache clearing.
+        这实现了需求 8.1：选择性缓存清除。
         
-        Args:
-            symbol: Stock symbol to clear cache for.
+        参数:
+            symbol: 要清除缓存的股票代码。
             
-        Returns:
-            Number of entries cleared.
+        返回:
+            清除的条目数量。
         """
         cleared_count = 0
         
-        # Clear from memory cache (iterate through all CacheKey instances)
+        # 从内存缓存清除（遍历所有 CacheKey 实例）
         keys_to_clear = []
         for key, cache_key in cls.ALL.items():
             if cache_key._symbol == symbol:
@@ -359,52 +358,52 @@ class CacheKey:
                 cls.ALL[key].cache1.pop(key, None)
                 cleared_count += 1
         
-        # Clear from SQLite cache
+        # 从 SQLite 缓存清除
         if cls._sqlite_backend is not None:
             try:
                 sqlite_cleared = cls._sqlite_backend.delete_by_symbol(symbol)
                 cleared_count = max(cleared_count, sqlite_cleared)
-                logger.info(f"Cleared {sqlite_cleared} SQLite cache entries for symbol: {symbol}")
+                logger.info(f"已清除股票 {symbol} 的 {sqlite_cleared} 条 SQLite 缓存条目")
             except Exception as e:
-                logger.error(f"Failed to clear SQLite cache for symbol {symbol}: {e}", exc_info=True)
+                logger.error(f"清除股票 {symbol} 的 SQLite 缓存失败: {e}", exc_info=True)
         
         return cleared_count
 
     @classmethod
     def clear_all(cls) -> int:
-        """Clear all cache entries.
+        """清除所有缓存条目。
         
-        This implements Requirement 8.2: complete cache clearing.
+        这实现了需求 8.2：完全缓存清除。
         
-        Returns:
-            Number of entries cleared.
+        返回:
+            清除的条目数量。
         """
         cleared_count = 0
         
-        # Clear all memory caches
+        # 清除所有内存缓存
         for cache_key in cls.ALL.values():
             cleared_count += len(cache_key.cache1)
             cache_key.cache1.clear()
         
-        # Clear SQLite cache
+        # 清除 SQLite 缓存
         if cls._sqlite_backend is not None:
             try:
                 sqlite_cleared = cls._sqlite_backend.clear()
                 cleared_count = max(cleared_count, sqlite_cleared)
-                logger.info(f"Cleared all cache entries: {sqlite_cleared} from SQLite")
+                logger.info(f"已清除所有缓存条目: SQLite 中 {sqlite_cleared} 条")
             except Exception as e:
-                logger.error(f"Failed to clear SQLite cache: {e}", exc_info=True)
+                logger.error(f"清除 SQLite 缓存失败: {e}", exc_info=True)
         
         return cleared_count
 
     @classmethod
     def get_statistics(cls) -> Dict[str, Any]:
-        """Get cache statistics.
+        """获取缓存统计信息。
         
-        This implements Requirement 7.4: cache statistics.
+        这实现了需求 7.4：缓存统计。
         
-        Returns:
-            Dictionary containing cache statistics.
+        返回:
+            包含缓存统计信息的字典。
         """
         stats = {
             "memory_cache_count": len(cls.ALL),
@@ -424,18 +423,18 @@ class CacheKey:
                     "sqlite_db_path": sqlite_stats.get("db_path", ""),
                 })
             except Exception as e:
-                logger.error(f"Failed to get SQLite stats: {e}", exc_info=True)
+                logger.error(f"获取 SQLite 统计信息失败: {e}", exc_info=True)
                 stats["sqlite_error"] = str(e)
         
         return stats
 
     def get_cache_dir(self) -> pathlib.Path:
-        """Get the cache directory path.
+        """获取缓存目录路径。
         
-        This method is kept for backward compatibility.
+        此方法保留用于向后兼容。
         
-        Returns:
-            Path to the cache directory.
+        返回:
+            缓存目录的路径。
         """
         home = pathlib.Path.home()
         name = __package__

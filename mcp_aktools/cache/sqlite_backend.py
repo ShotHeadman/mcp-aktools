@@ -1,8 +1,7 @@
-"""SQLite cache backend implementation.
+"""SQLite 缓存后端实现。
 
-This module provides a SQLite-based persistent cache backend for storing
-API query results. It supports permanent storage for historical data
-and thread-safe operations.
+此模块提供基于 SQLite 的持久化缓存后端，用于存储 API 查询结果。
+支持历史数据的永久存储和线程安全操作。
 """
 
 import logging
@@ -17,56 +16,56 @@ logger = logging.getLogger(__name__)
 
 
 class SQLiteCacheBackend:
-    """SQLite cache backend implementation.
+    """SQLite 缓存后端实现。
     
-    This class provides a persistent cache storage using SQLite database.
-    It supports thread-safe operations and permanent storage for historical data.
+    此类提供使用 SQLite 数据库的持久化缓存存储。
+    支持线程安全操作和历史数据的永久存储。
     
-    Attributes:
-        db_path: Path to the SQLite database file.
-        _lock: Threading lock for thread-safe operations.
-        _local: Thread-local storage for database connections.
+    属性:
+        db_path: SQLite 数据库文件路径。
+        _lock: 用于线程安全操作的线程锁。
+        _local: 用于数据库连接的线程本地存储。
     """
     
     def __init__(self, db_path: Optional[str] = None):
-        """Initialize SQLite cache backend.
+        """初始化 SQLite 缓存后端。
         
-        Args:
-            db_path: Database file path. If None, uses default path in user's cache directory.
+        参数:
+            db_path: 数据库文件路径。如果为 None，则使用用户缓存目录中的默认路径。
         """
         self.db_path = db_path or self._get_default_db_path()
         self._lock = threading.Lock()
         self._local = threading.local()
         
-        # Ensure parent directory exists
+        # 确保父目录存在
         self._ensure_db_directory()
         
-        # Create tables
+        # 创建数据表
         self._create_tables()
         
-        logger.debug(f"SQLite cache backend initialized at: {self.db_path}")
+        logger.debug(f"SQLite 缓存后端已初始化，路径: {self.db_path}")
     
     def _get_default_db_path(self) -> str:
-        """Get default database path in project's data directory.
+        """获取项目数据目录中的默认数据库路径。
         
-        Returns:
-            str: Default database file path (data/stock_data.db).
+        返回:
+            str: 默认数据库文件路径 (data/stock_data.db)。
         """
-        # Get the project root directory (where mcp_aktools package is located)
+        # 获取项目根目录（mcp_aktools 包所在位置）
         package_dir = Path(__file__).parent.parent.parent
         db_dir = package_dir / "data"
         return str(db_dir / "stock_data.db")
 
     def _ensure_db_directory(self) -> None:
-        """Ensure the database directory exists."""
+        """确保数据库目录存在。"""
         db_dir = Path(self.db_path).parent
         db_dir.mkdir(parents=True, exist_ok=True)
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get thread-local database connection.
+        """获取线程本地的数据库连接。
         
-        Returns:
-            sqlite3.Connection: Database connection for current thread.
+        返回:
+            sqlite3.Connection: 当前线程的数据库连接。
         """
         if not hasattr(self._local, 'connection') or self._local.connection is None:
             self._local.connection = sqlite3.connect(
@@ -74,19 +73,19 @@ class SQLiteCacheBackend:
                 check_same_thread=False,
                 timeout=30.0
             )
-            # Enable WAL mode for better concurrent access
+            # 启用 WAL 模式以获得更好的并发访问性能
             self._local.connection.execute("PRAGMA journal_mode=WAL")
             self._local.connection.execute("PRAGMA synchronous=NORMAL")
         return self._local.connection
     
     def _create_tables(self) -> None:
-        """Create required database tables if they don't exist."""
+        """如果数据表不存在则创建。"""
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 
-                # Main cache table
+                # 主缓存表
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS cache_entries (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,7 +98,7 @@ class SQLiteCacheBackend:
                     )
                 """)
                 
-                # Create indexes for faster lookups
+                # 创建索引以加快查询速度
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_cache_key 
                     ON cache_entries(cache_key)
@@ -113,7 +112,7 @@ class SQLiteCacheBackend:
                     ON cache_entries(data_type)
                 """)
                 
-                # Dividend records table
+                # 分红记录表
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS dividend_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,7 +124,7 @@ class SQLiteCacheBackend:
                     )
                 """)
                 
-                # Cache statistics table
+                # 缓存统计表
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS cache_stats (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,20 +137,20 @@ class SQLiteCacheBackend:
                 """)
                 
                 conn.commit()
-                logger.debug("Database tables created successfully")
+                logger.debug("数据库表创建成功")
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to create database tables: {e}", exc_info=True)
+                logger.error(f"创建数据库表失败: {e}", exc_info=True)
                 raise
 
     def get(self, key: str) -> Optional[bytes]:
-        """Get cached data by key.
+        """根据键获取缓存数据。
         
-        Args:
-            key: Cache key.
+        参数:
+            key: 缓存键。
             
-        Returns:
-            Serialized data as bytes, or None if not found.
+        返回:
+            序列化后的字节数据，如果未找到则返回 None。
         """
         with self._lock:
             conn = self._get_connection()
@@ -164,15 +163,15 @@ class SQLiteCacheBackend:
                 row = cursor.fetchone()
                 
                 if row:
-                    logger.debug(f"SQLite cache hit: {key}")
+                    logger.debug(f"SQLite 缓存命中: {key}")
                     self._record_hit()
                     return row[0]
                 else:
-                    logger.debug(f"SQLite cache miss: {key}")
+                    logger.debug(f"SQLite 缓存未命中: {key}")
                     self._record_miss()
                     return None
             except sqlite3.Error as e:
-                logger.error(f"Failed to get cache entry: {e}", exc_info=True)
+                logger.error(f"获取缓存条目失败: {e}", exc_info=True)
                 return None
     
     def set(
@@ -183,19 +182,19 @@ class SQLiteCacheBackend:
         data_type: Optional[str] = None,
         symbol: Optional[str] = None
     ) -> None:
-        """Store data in cache.
+        """将数据存储到缓存中。
         
-        Args:
-            key: Cache key.
-            value: Serialized data as bytes.
-            created_at: Creation timestamp. If None, uses current time.
-            data_type: Type of data (e.g., 'price', 'info', 'dividend').
-            symbol: Stock symbol for cache invalidation purposes.
+        参数:
+            key: 缓存键。
+            value: 序列化后的字节数据。
+            created_at: 创建时间戳。如果为 None，则使用当前时间。
+            data_type: 数据类型（如 'price'、'info'、'dividend'）。
+            symbol: 股票代码，用于缓存失效处理。
         """
         if created_at is None:
             created_at = datetime.now()
         
-        # Convert datetime to ISO format string to avoid Python 3.12 deprecation warning
+        # 将 datetime 转换为 ISO 格式字符串，避免 Python 3.12 弃用警告
         created_at_str = created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
         updated_at_str = datetime.now().isoformat()
         
@@ -213,20 +212,20 @@ class SQLiteCacheBackend:
                         symbol = excluded.symbol
                 """, (key, value, created_at_str, updated_at_str, data_type, symbol))
                 conn.commit()
-                logger.debug(f"SQLite cache set: {key}")
+                logger.debug(f"SQLite 缓存已设置: {key}")
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to set cache entry: {e}", exc_info=True)
+                logger.error(f"设置缓存条目失败: {e}", exc_info=True)
                 raise
     
     def delete(self, key: str) -> bool:
-        """Delete cached data by key.
+        """根据键删除缓存数据。
         
-        Args:
-            key: Cache key.
+        参数:
+            key: 缓存键。
             
-        Returns:
-            True if entry was deleted, False otherwise.
+        返回:
+            如果条目被删除则返回 True，否则返回 False。
         """
         with self._lock:
             conn = self._get_connection()
@@ -239,21 +238,21 @@ class SQLiteCacheBackend:
                 conn.commit()
                 deleted = cursor.rowcount > 0
                 if deleted:
-                    logger.debug(f"SQLite cache deleted: {key}")
+                    logger.debug(f"SQLite 缓存已删除: {key}")
                 return deleted
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to delete cache entry: {e}", exc_info=True)
+                logger.error(f"删除缓存条目失败: {e}", exc_info=True)
                 return False
 
     def delete_by_prefix(self, prefix: str) -> int:
-        """Delete cached data by key prefix.
+        """根据键前缀删除缓存数据。
         
-        Args:
-            prefix: Cache key prefix.
+        参数:
+            prefix: 缓存键前缀。
             
-        Returns:
-            Number of deleted entries.
+        返回:
+            删除的条目数量。
         """
         with self._lock:
             conn = self._get_connection()
@@ -266,21 +265,21 @@ class SQLiteCacheBackend:
                 conn.commit()
                 deleted_count = cursor.rowcount
                 if deleted_count > 0:
-                    logger.debug(f"SQLite cache deleted {deleted_count} entries with prefix: {prefix}")
+                    logger.debug(f"SQLite 缓存已删除 {deleted_count} 条前缀为 {prefix} 的条目")
                 return deleted_count
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to delete cache entries by prefix: {e}", exc_info=True)
+                logger.error(f"根据前缀删除缓存条目失败: {e}", exc_info=True)
                 return 0
     
     def delete_by_symbol(self, symbol: str) -> int:
-        """Delete cached data by stock symbol.
+        """根据股票代码删除缓存数据。
         
-        Args:
-            symbol: Stock symbol.
+        参数:
+            symbol: 股票代码。
             
-        Returns:
-            Number of deleted entries.
+        返回:
+            删除的条目数量。
         """
         with self._lock:
             conn = self._get_connection()
@@ -293,19 +292,19 @@ class SQLiteCacheBackend:
                 conn.commit()
                 deleted_count = cursor.rowcount
                 if deleted_count > 0:
-                    logger.debug(f"SQLite cache deleted {deleted_count} entries for symbol: {symbol}")
+                    logger.debug(f"SQLite 缓存已删除股票 {symbol} 的 {deleted_count} 条条目")
                     self._record_invalidation(deleted_count)
                 return deleted_count
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to delete cache entries by symbol: {e}", exc_info=True)
+                logger.error(f"根据股票代码删除缓存条目失败: {e}", exc_info=True)
                 return 0
     
     def clear(self) -> int:
-        """Clear all cached data.
+        """清除所有缓存数据。
         
-        Returns:
-            Number of deleted entries.
+        返回:
+            删除的条目数量。
         """
         with self._lock:
             conn = self._get_connection()
@@ -317,33 +316,33 @@ class SQLiteCacheBackend:
                 cursor.execute("DELETE FROM cache_entries")
                 conn.commit()
                 
-                logger.debug(f"SQLite cache cleared: {count} entries deleted")
+                logger.debug(f"SQLite 缓存已清除: 删除了 {count} 条条目")
                 return count
             except sqlite3.Error as e:
                 conn.rollback()
-                logger.error(f"Failed to clear cache: {e}", exc_info=True)
+                logger.error(f"清除缓存失败: {e}", exc_info=True)
                 return 0
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics.
+        """获取缓存统计信息。
         
-        Returns:
-            Dictionary containing entry_count, total_size, hits, misses, etc.
+        返回:
+            包含 entry_count、total_size、hits、misses 等信息的字典。
         """
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 
-                # Get entry count
+                # 获取条目数量
                 cursor.execute("SELECT COUNT(*) FROM cache_entries")
                 entry_count = cursor.fetchone()[0]
                 
-                # Get total data size
+                # 获取总数据大小
                 cursor.execute("SELECT COALESCE(SUM(LENGTH(data)), 0) FROM cache_entries")
                 total_size = cursor.fetchone()[0]
                 
-                # Get today's statistics
+                # 获取今日统计数据
                 today = datetime.now().date().isoformat()
                 cursor.execute(
                     "SELECT hits, misses, invalidations FROM cache_stats WHERE stat_date = ?",
@@ -356,7 +355,7 @@ class SQLiteCacheBackend:
                 else:
                     hits, misses, invalidations = 0, 0, 0
                 
-                # Calculate hit rate
+                # 计算命中率
                 total_requests = hits + misses
                 hit_rate = (hits / total_requests * 100) if total_requests > 0 else 0.0
                 
@@ -370,7 +369,7 @@ class SQLiteCacheBackend:
                     "db_path": self.db_path
                 }
             except sqlite3.Error as e:
-                logger.error(f"Failed to get cache stats: {e}", exc_info=True)
+                logger.error(f"获取缓存统计信息失败: {e}", exc_info=True)
                 return {
                     "entry_count": 0,
                     "total_size_bytes": 0,
@@ -383,30 +382,30 @@ class SQLiteCacheBackend:
                 }
     
     def _record_hit(self) -> None:
-        """Record a cache hit in statistics."""
+        """记录一次缓存命中。"""
         self._update_stats("hits")
     
     def _record_miss(self) -> None:
-        """Record a cache miss in statistics."""
+        """记录一次缓存未命中。"""
         self._update_stats("misses")
     
     def _record_invalidation(self, count: int = 1) -> None:
-        """Record cache invalidations in statistics."""
+        """记录缓存失效次数。"""
         self._update_stats("invalidations", count)
     
     def _update_stats(self, field: str, increment: int = 1) -> None:
-        """Update statistics for a given field.
+        """更新指定字段的统计数据。
         
-        Args:
-            field: Field to update ('hits', 'misses', or 'invalidations').
-            increment: Amount to increment by.
+        参数:
+            field: 要更新的字段（'hits'、'misses' 或 'invalidations'）。
+            increment: 增加的数量。
         """
         conn = self._get_connection()
         try:
             today = datetime.now().date().isoformat()
             cursor = conn.cursor()
             
-            # Try to insert or update
+            # 尝试插入或更新
             cursor.execute(f"""
                 INSERT INTO cache_stats (stat_date, {field})
                 VALUES (?, ?)
@@ -415,18 +414,18 @@ class SQLiteCacheBackend:
             """, (today, increment, increment))
             conn.commit()
         except sqlite3.Error as e:
-            # Statistics update failure should not affect main operations
-            logger.debug(f"Failed to update cache stats: {e}")
+            # 统计更新失败不应影响主要操作
+            logger.debug(f"更新缓存统计失败: {e}")
     
     def close(self) -> None:
-        """Close database connection for current thread."""
+        """关闭当前线程的数据库连接。"""
         if hasattr(self._local, 'connection') and self._local.connection:
             self._local.connection.close()
             self._local.connection = None
-            logger.debug("SQLite cache backend connection closed")
+            logger.debug("SQLite 缓存后端连接已关闭")
     
     def __del__(self):
-        """Cleanup on deletion."""
+        """析构时清理资源。"""
         try:
             self.close()
         except Exception:

@@ -1,12 +1,12 @@
-"""DataFrame serialization utilities for cache storage.
+"""DataFrame 序列化工具，用于缓存存储。
 
-This module provides functions to serialize and deserialize pandas DataFrames
-using Parquet format for efficient storage in the SQLite cache backend.
+此模块提供使用 Parquet 格式序列化和反序列化 pandas DataFrame 的函数，
+以便在 SQLite 缓存后端中高效存储。
 
-Parquet format is chosen because:
-- Preserves column types and data integrity
-- High compression efficiency
-- Fast read/write performance
+选择 Parquet 格式的原因：
+- 保留列类型和数据完整性
+- 高压缩效率
+- 快速读写性能
 """
 
 import io
@@ -19,23 +19,23 @@ logger = logging.getLogger(__name__)
 
 
 class CacheSerializationError(Exception):
-    """Exception raised when serialization or deserialization fails."""
+    """序列化或反序列化失败时抛出的异常。"""
     pass
 
 
 def serialize_dataframe(df: pd.DataFrame) -> bytes:
-    """Serialize a DataFrame to bytes using Parquet format.
+    """使用 Parquet 格式将 DataFrame 序列化为字节。
     
-    Args:
-        df: The pandas DataFrame to serialize.
+    参数:
+        df: 要序列化的 pandas DataFrame。
         
-    Returns:
-        Serialized data as bytes.
+    返回:
+        序列化后的字节数据。
         
-    Raises:
-        CacheSerializationError: If serialization fails.
+    异常:
+        CacheSerializationError: 序列化失败时抛出。
         
-    Example:
+    示例:
         >>> df = pd.DataFrame({'a': [1, 2, 3], 'b': ['x', 'y', 'z']})
         >>> data = serialize_dataframe(df)
         >>> isinstance(data, bytes)
@@ -43,7 +43,7 @@ def serialize_dataframe(df: pd.DataFrame) -> bytes:
     """
     if not isinstance(df, pd.DataFrame):
         raise CacheSerializationError(
-            f"Expected pandas DataFrame, got {type(df).__name__}"
+            f"期望 pandas DataFrame，实际得到 {type(df).__name__}"
         )
     
     try:
@@ -51,29 +51,29 @@ def serialize_dataframe(df: pd.DataFrame) -> bytes:
         df.to_parquet(buffer, engine='pyarrow', compression='snappy')
         return buffer.getvalue()
     except ImportError as e:
-        logger.error("pyarrow is required for DataFrame serialization")
+        logger.error("DataFrame 序列化需要 pyarrow")
         raise CacheSerializationError(
-            "pyarrow is required for DataFrame serialization. "
-            "Install it with: pip install pyarrow"
+            "DataFrame 序列化需要 pyarrow。"
+            "请使用以下命令安装: pip install pyarrow"
         ) from e
     except Exception as e:
-        logger.error(f"Failed to serialize DataFrame: {e}", exc_info=True)
-        raise CacheSerializationError(f"Failed to serialize DataFrame: {e}") from e
+        logger.error(f"序列化 DataFrame 失败: {e}", exc_info=True)
+        raise CacheSerializationError(f"序列化 DataFrame 失败: {e}") from e
 
 
 def deserialize_dataframe(data: Union[bytes, memoryview]) -> pd.DataFrame:
-    """Deserialize bytes to a DataFrame using Parquet format.
+    """使用 Parquet 格式将字节反序列化为 DataFrame。
     
-    Args:
-        data: Serialized data as bytes or memoryview.
+    参数:
+        data: 序列化后的字节数据或 memoryview。
         
-    Returns:
-        The deserialized pandas DataFrame.
+    返回:
+        反序列化后的 pandas DataFrame。
         
-    Raises:
-        CacheSerializationError: If deserialization fails.
+    异常:
+        CacheSerializationError: 反序列化失败时抛出。
         
-    Example:
+    示例:
         >>> df = pd.DataFrame({'a': [1, 2, 3], 'b': ['x', 'y', 'z']})
         >>> data = serialize_dataframe(df)
         >>> restored = deserialize_dataframe(data)
@@ -81,26 +81,26 @@ def deserialize_dataframe(data: Union[bytes, memoryview]) -> pd.DataFrame:
         True
     """
     if data is None:
-        raise CacheSerializationError("Cannot deserialize None data")
+        raise CacheSerializationError("无法反序列化 None 数据")
     
     if not isinstance(data, (bytes, memoryview)):
         raise CacheSerializationError(
-            f"Expected bytes or memoryview, got {type(data).__name__}"
+            f"期望 bytes 或 memoryview，实际得到 {type(data).__name__}"
         )
     
     try:
-        # Convert memoryview to bytes if necessary
+        # 如有必要，将 memoryview 转换为 bytes
         if isinstance(data, memoryview):
             data = bytes(data)
         
         buffer = io.BytesIO(data)
         return pd.read_parquet(buffer, engine='pyarrow')
     except ImportError as e:
-        logger.error("pyarrow is required for DataFrame deserialization")
+        logger.error("DataFrame 反序列化需要 pyarrow")
         raise CacheSerializationError(
-            "pyarrow is required for DataFrame deserialization. "
-            "Install it with: pip install pyarrow"
+            "DataFrame 反序列化需要 pyarrow。"
+            "请使用以下命令安装: pip install pyarrow"
         ) from e
     except Exception as e:
-        logger.error(f"Failed to deserialize DataFrame: {e}", exc_info=True)
-        raise CacheSerializationError(f"Failed to deserialize DataFrame: {e}") from e
+        logger.error(f"反序列化 DataFrame 失败: {e}", exc_info=True)
+        raise CacheSerializationError(f"反序列化 DataFrame 失败: {e}") from e
