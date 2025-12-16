@@ -207,7 +207,16 @@ class BacktestFormatter:
 
     def format_trades(self) -> str:
         """格式化交易记录列表。
-        
+
+        输出详细的交易记录，包括：
+        - 交易时间
+        - 买入/卖出操作（彩色标注）
+        - 交易数量
+        - 成交价格
+        - 成交金额
+        - 手续费
+        - 交易后现金余额
+
         Returns:
             格式化的交易记录字符串
         """
@@ -221,20 +230,21 @@ class BacktestFormatter:
         if self.use_color:
             title = f"{self.BOLD}{title}{self.RESET}"
         lines.append(title)
+        lines.append("=" * 90)
 
         # 定义列宽（考虑中文字符）
         col_widths = {
             'time': 20,
-            'action': 6,
-            'quantity': 10,
-            'price': 10,
-            'amount': 14,
-            'commission': 10,
-            'cash': 14,
+            'action': 8,
+            'quantity': 12,
+            'price': 12,
+            'amount': 16,
+            'commission': 12,
+            'cash': 16,
         }
 
         # 表头
-        headers = ['时间', '操作', '数量', '价格', '成交金额', '手续费', '现金余额']
+        headers = ['交易时间', '操作', '数量(股)', '价格', '成交金额', '手续费', '现金余额']
         header_line = (
             _pad_str(headers[0], col_widths['time']) +
             _pad_str(headers[1], col_widths['action']) +
@@ -244,6 +254,8 @@ class BacktestFormatter:
             _pad_str(headers[5], col_widths['commission'], 'right') +
             _pad_str(headers[6], col_widths['cash'], 'right')
         )
+        if self.use_color:
+            header_line = f"{self.BOLD}{header_line}{self.RESET}"
         lines.append(header_line)
 
         # 分隔线
@@ -251,25 +263,63 @@ class BacktestFormatter:
         lines.append("-" * total_width)
 
         # 交易记录
-        for trade in self.result.trades:
-            action = trade.action
-            if self.use_color:
-                if action == "BUY":
-                    action = f"{self.RED}{action}{self.RESET}"
-                else:
-                    action = f"{self.GREEN}{action}{self.RESET}"
-
+        for i, trade in enumerate(self.result.trades, 1):
+            action_text = trade.action
             amount = trade.quantity * trade.price
+
+            # 彩色标注操作类型
+            if self.use_color:
+                if trade.action == "BUY":
+                    action_display = f"{self.RED}买入{self.RESET}"
+                else:
+                    action_display = f"{self.GREEN}卖出{self.RESET}"
+            else:
+                action_display = "买入" if trade.action == "BUY" else "卖出"
+
+            # 彩色标注金额（买入红色，卖出绿色）
+            if self.use_color:
+                if trade.action == "BUY":
+                    amount_str = f"{self.RED}{amount:,.2f}{self.RESET}"
+                else:
+                    amount_str = f"{self.GREEN}{amount:,.2f}{self.RESET}"
+            else:
+                amount_str = f"{amount:,.2f}"
+
             row = (
                 _pad_str(trade.timestamp, col_widths['time']) +
-                _pad_str(action, col_widths['action']) +
+                _pad_str(action_display, col_widths['action']) +
                 _pad_str(f"{trade.quantity:,}", col_widths['quantity'], 'right') +
                 _pad_str(f"{trade.price:.2f}", col_widths['price'], 'right') +
-                _pad_str(f"{amount:,.2f}", col_widths['amount'], 'right') +
+                _pad_str(amount_str, col_widths['amount'], 'right') +
                 _pad_str(f"{trade.commission:.2f}", col_widths['commission'], 'right') +
                 _pad_str(f"{trade.cash_after:,.2f}", col_widths['cash'], 'right')
             )
             lines.append(row)
+
+        # 添加汇总信息
+        lines.append("-" * total_width)
+        total_trades = len(self.result.trades)
+        buy_trades = [t for t in self.result.trades if t.action == "BUY"]
+        sell_trades = [t for t in self.result.trades if t.action == "SELL"]
+        total_buy_amount = sum(t.quantity * t.price for t in buy_trades)
+        total_sell_amount = sum(t.quantity * t.price for t in sell_trades)
+        total_commission = sum(t.commission for t in self.result.trades)
+
+        summary_title = "交易汇总"
+        if self.use_color:
+            summary_title = f"{self.BOLD}{summary_title}{self.RESET}"
+        lines.append(summary_title)
+
+        if self.use_color:
+            lines.append(f"  总交易次数: {total_trades} (买入: {self.RED}{len(buy_trades)}{self.RESET}, 卖出: {self.GREEN}{len(sell_trades)}{self.RESET})")
+            lines.append(f"  买入总金额: {self.RED}{total_buy_amount:,.2f}{self.RESET}")
+            lines.append(f"  卖出总金额: {self.GREEN}{total_sell_amount:,.2f}{self.RESET}")
+        else:
+            lines.append(f"  总交易次数: {total_trades} (买入: {len(buy_trades)}, 卖出: {len(sell_trades)})")
+            lines.append(f"  买入总金额: {total_buy_amount:,.2f}")
+            lines.append(f"  卖出总金额: {total_sell_amount:,.2f}")
+
+        lines.append(f"  总手续费:   {total_commission:,.2f}")
 
         return "\n".join(lines)
 

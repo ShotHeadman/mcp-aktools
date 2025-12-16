@@ -73,6 +73,11 @@ class BacktestEngine:
         
         使用 akshare 获取股票历史数据，并计算 MACD、KDJ、RSI、BOLL 等技术指标。
         
+        为了确保技术指标能够正确计算，会在回测开始日期之前额外加载历史数据：
+        - KDJ 需要至少 9 根 K 线
+        - MACD 需要至少 26 根 K 线
+        - 为保险起见，额外加载 60 根 K 线（约 90 个自然日）
+        
         Raises:
             BacktestError: 数据加载失败时抛出
         """
@@ -85,8 +90,39 @@ class BacktestEngine:
             # 获取 AkShare 客户端
             client = self._get_akshare_client()
             
-            # 转换日期格式（YYYY-MM-DD -> YYYYMMDD）
-            start_date = self.config.start_date.replace("-", "")
+            # 计算需要额外加载的历史数据
+            # MACD需要26根K线，KDJ需要9+3根，BOLL需要20根
+            # 为了保险起见，额外加载60根K线
+            warmup_bars = 60
+            start_date_obj = datetime.strptime(self.config.start_date, "%Y-%m-%d")
+            
+            # 根据K线周期计算需要往前推多少天
+            # 目标：获取至少60根K线用于技术指标计算
+            # 日K: 60根 ≈ 90天（考虑节假日，约1.5倍）
+            # 周K: 60根 ≈ 450天（约1.1倍，考虑节假日）
+            # 月K: 60根 ≈ 1900天（约1.05倍）
+            # 分钟K: 根据每天K线数量计算，加50%buffer
+            freq = self.config.frequency
+            if freq == "d":
+                warmup_days = int(warmup_bars * 1.5)  # 90天
+            elif freq == "w":
+                warmup_days = int(warmup_bars * 7.5)  # 450天
+            elif freq == "m":
+                warmup_days = int(warmup_bars * 32)  # 1920天
+            else:
+                # 分钟K线（1/5/15/30/60分钟）
+                # A股每天约4小时交易 = 240分钟
+                minutes_per_bar = int(freq) if freq.isdigit() else 5
+                bars_per_day = max(1, 240 // minutes_per_bar)
+                warmup_days = int((warmup_bars / bars_per_day) * 1.5) + 5
+            
+            from datetime import timedelta
+            extended_start_date = (start_date_obj - timedelta(days=warmup_days)).strftime("%Y%m%d")
+            
+            logger.info(
+                f"扩展数据加载范围: 原始开始日期={self.config.start_date}, "
+                f"扩展开始日期={extended_start_date}, 预热K线数={warmup_bars}"
+            )
             
             # 映射周期参数
             period_map = {
@@ -101,12 +137,12 @@ class BacktestEngine:
             }
             period = period_map.get(self.config.frequency, "daily")
             
-            # 获取K线数据
+            # 获取K线数据（使用扩展的开始日期）
             df = client.stock_zh_a_hist(
                 symbol=symbol,
                 market=market,
                 period=period,
-                start_date=start_date,
+                start_date=extended_start_date,
                 ttl=3600  # 1小时缓存
             )
             
@@ -119,7 +155,11 @@ class BacktestEngine:
             # 标准化列名
             df = self._standardize_columns(df)
             
-            # 过滤日期范围
+            # 先计算技术指标（使用完整的扩展数据，确保指标计算准确）
+            # 注意：必须在过滤日期范围之前计算，否则 MACD/KDJ 等指标会因数据不足而不准确
+            self._calculate_indicators(df)
+            
+            # 过滤日期范围（在计算指标之后）
             df = self._filter_date_range(df)
             
             if df.empty:
@@ -127,9 +167,6 @@ class BacktestEngine:
                     "data_loading",
                     f"指定日期范围内无数据: {self.config.start_date} ~ {self.config.end_date}"
                 )
-            
-            # 计算技术指标
-            self._calculate_indicators(df)
             
             # 重置索引
             df = df.reset_index(drop=True)
