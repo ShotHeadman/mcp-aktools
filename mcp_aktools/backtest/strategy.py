@@ -54,6 +54,7 @@ class Strategy(ABC):
         _current_index: 当前K线索引（由引擎设置）
         _data: 完整K线数据（由引擎设置）
         _signal_calculator: 信号计算器（由引擎设置）
+        _realtime_calculator: 实时指标计算器（由引擎设置，仅在realtime_indicator=True时有效）
     
     Example:
         >>> class MyStrategy(Strategy):
@@ -87,6 +88,7 @@ class Strategy(ABC):
         self._current_index: int = 0
         self._data: Optional[pd.DataFrame] = None
         self._signal_calculator: Optional[Any] = None  # SignalCalculator 类型
+        self._realtime_calculator: Optional[Any] = None  # RealtimeIndicatorCalculator 类型
     
     @abstractmethod
     def on_bar(self, bar: pd.Series, history: pd.DataFrame) -> None:
@@ -180,7 +182,9 @@ class Strategy(ABC):
     def get_indicator(self, name: str) -> Optional[float]:
         """获取指标当前值。
         
-        从当前K线数据中获取指定技术指标的值。
+        根据配置的 realtime_indicator 模式：
+        - False（默认）: 从当前K线数据中获取（使用收盘价计算的指标）
+        - True: 使用"历史收盘价 + 当天开盘价"实时计算的指标
         
         Args:
             name: 指标名称，支持以下格式：
@@ -197,6 +201,12 @@ class Strategy(ABC):
         """
         if self._current_bar is None:
             return None
+        
+        # 如果启用了实时指标模式，优先使用实时计算器
+        if self.config.realtime_indicator and self._realtime_calculator is not None:
+            value = self._realtime_calculator.get_indicator(self._current_index, name)
+            if value is not None:
+                return value
         
         # 处理点分名称格式（如 KDJ.J -> J）
         indicator_name = name
@@ -223,7 +233,9 @@ class Strategy(ABC):
     def get_signal(self, indicator: str, signal_type: str) -> bool:
         """获取技术信号。
         
-        评估指定指标的信号条件，返回是否触发。
+        根据配置的 realtime_indicator 模式：
+        - False（默认）: 使用收盘价计算的信号
+        - True: 使用"历史收盘价 + 当天开盘价"实时计算的信号
         
         Args:
             indicator: 指标名称，支持：
@@ -234,7 +246,8 @@ class Strategy(ABC):
             signal_type: 信号类型，支持：
                 - "golden_cross": 金叉（DIF上穿DEA 或 K上穿D）
                 - "death_cross": 死叉（DIF下穿DEA 或 K下穿D）
-                - "death_cross_strong": 强死叉（死叉且在零轴下方）
+                - "death_cross_strong": 强死叉（死叉且DIF从正变负或DIF>10）
+                - "golden_cross_strong": 强金叉（金叉且DIF从负变正或DIF<-10）
                 - "overbought": 超买（RSI > 70）
                 - "oversold": 超卖（RSI < 30）
                 - "upper_break": 突破上轨（价格突破布林带上轨）
@@ -249,12 +262,16 @@ class Strategy(ABC):
             >>> if self.get_signal('kdj', 'death_cross'):
             ...     print("KDJ 死叉信号")
         """
-        if self._signal_calculator is None:
-            return False
-        
         # 将指标名称和信号类型转换为小写以便匹配
         indicator = indicator.lower()
         signal_type = signal_type.lower()
+        
+        # 如果启用了实时指标模式，使用实时计算器
+        if self.config.realtime_indicator and self._realtime_calculator is not None:
+            return self._get_realtime_signal(indicator, signal_type)
+        
+        if self._signal_calculator is None:
+            return False
         
         try:
             # 根据指标类型调用相应的信号计算方法
@@ -264,11 +281,9 @@ class Strategy(ABC):
                 elif signal_type == "death_cross":
                     return self._signal_calculator.macd_death_cross(self._current_index)
                 elif signal_type == "death_cross_strong":
-                    # 强死叉：死叉且 DIF 在零轴下方
-                    if self._signal_calculator.macd_death_cross(self._current_index):
-                        dif = self.get_indicator("DIF")
-                        return dif is not None and dif < 0
-                    return False
+                    return self._signal_calculator.macd_death_cross_strong(self._current_index)
+                elif signal_type == "golden_cross_strong":
+                    return self._signal_calculator.macd_golden_cross_strong(self._current_index)
             
             elif indicator == "kdj":
                 if signal_type == "golden_cross":
@@ -290,6 +305,58 @@ class Strategy(ABC):
         
         except (AttributeError, IndexError, KeyError):
             # 信号计算器方法不存在或索引越界
+            pass
+        
+        return False
+    
+    def _get_realtime_signal(self, indicator: str, signal_type: str) -> bool:
+        """获取实时计算的技术信号。
+        
+        Args:
+            indicator: 指标名称
+            signal_type: 信号类型
+            
+        Returns:
+            是否触发信号
+        """
+        if self._realtime_calculator is None:
+            return False
+        
+        try:
+            if indicator == "macd":
+                if signal_type == "death_cross_strong":
+                    return self._realtime_calculator.check_macd_death_cross_strong(
+                        self._current_index
+                    )
+                elif signal_type == "golden_cross_strong":
+                    return self._realtime_calculator.check_macd_golden_cross_strong(
+                        self._current_index
+                    )
+                # 普通金叉/死叉需要检查前后DIF/DEA关系
+                indicators = self._realtime_calculator.calculate_at_open(self._current_index)
+                dif = indicators.get('DIF')
+                dea = indicators.get('DEA')
+                prev_dif = indicators.get('_prev_DIF')
+                prev_dea = indicators.get('_prev_DEA')
+                
+                if any(v is None for v in [dif, dea, prev_dif, prev_dea]):
+                    return False
+                
+                if signal_type == "golden_cross":
+                    return (prev_dif <= prev_dea) and (dif > dea)
+                elif signal_type == "death_cross":
+                    return (prev_dif >= prev_dea) and (dif < dea)
+            
+            elif indicator == "rsi":
+                rsi = self._realtime_calculator.get_indicator(self._current_index, 'RSI')
+                if rsi is None:
+                    return False
+                if signal_type == "overbought":
+                    return rsi > 70
+                elif signal_type == "oversold":
+                    return rsi < 30
+        
+        except Exception:
             pass
         
         return False

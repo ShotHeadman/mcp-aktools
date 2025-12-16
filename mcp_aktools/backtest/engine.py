@@ -875,6 +875,12 @@ class BacktestEngine:
         # 设置策略的数据引用
         strategy._data = self.data
         strategy._signal_calculator = self.signal_calculator
+        
+        # 如果启用实时指标模式，初始化实时指标计算器
+        if self.config.realtime_indicator:
+            from .realtime_indicators import RealtimeIndicatorCalculator
+            strategy._realtime_calculator = RealtimeIndicatorCalculator(self.data)
+            logger.info("已启用实时指标模式（开盘价模式）")
 
         # 权益曲线列表
         equity_curve: List[float] = []
@@ -904,15 +910,29 @@ class BacktestEngine:
             # 检查止损止盈（在策略执行前检查）
             self._check_stop_loss_take_profit(strategy, bar, i)
 
-            # 处理待执行订单（来自上一根K线的策略信号）
-            self._process_pending_orders(strategy, bar, i)
+            # 根据模式选择不同的执行流程
+            if self.config.realtime_indicator:
+                # 实时模式：开盘时判断信号并立即执行
+                # 1. 执行策略逻辑（产生订单）
+                try:
+                    strategy.on_bar(bar, history)
+                except Exception as e:
+                    logger.error(f"策略执行异常: {e}", exc_info=True)
+                    raise BacktestError("strategy_execution", str(e)) from e
+                
+                # 2. 立即处理订单（当天开盘价执行）
+                self._process_pending_orders(strategy, bar, i)
+            else:
+                # 标准模式：收盘时判断信号，下一根K线执行
+                # 1. 处理待执行订单（来自上一根K线的策略信号）
+                self._process_pending_orders(strategy, bar, i)
 
-            # 执行策略逻辑（可能产生新的订单）
-            try:
-                strategy.on_bar(bar, history)
-            except Exception as e:
-                logger.error(f"策略执行异常: {e}", exc_info=True)
-                raise BacktestError("strategy_execution", str(e)) from e
+                # 2. 执行策略逻辑（可能产生新的订单，下一根K线执行）
+                try:
+                    strategy.on_bar(bar, history)
+                except Exception as e:
+                    logger.error(f"策略执行异常: {e}", exc_info=True)
+                    raise BacktestError("strategy_execution", str(e)) from e
 
             # 记录当前权益
             current_equity = strategy.total_equity
