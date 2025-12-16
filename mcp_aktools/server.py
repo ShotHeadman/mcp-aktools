@@ -385,6 +385,89 @@ def register_tools(mcp: FastMCP) -> None:
             "reason": reason,
         }
 
+    # ========== 回测工具 ==========
+
+    from .tools import backtest as backtest_tools
+
+    @mcp.tool(
+        name="run_backtest",
+        title="运行量化回测",
+        description="运行量化回测，接受策略代码字符串，解析并执行回测，返回格式化结果",
+    )
+    def run_backtest(
+        stock_code: str = Field(description="股票代码，格式: sh.XXXXXX 或 sz.XXXXXX"),
+        start_date: str = Field(description="开始日期，格式: YYYY-MM-DD"),
+        end_date: str = Field(description="结束日期，格式: YYYY-MM-DD"),
+        strategy_code: str = Field(description="策略代码，必须定义继承自 Strategy 的类"),
+        initial_capital: float = Field(1000000, description="初始资金(int)"),
+        frequency: str = Field("d", description="K线周期，仅支持: [1/5/15/30/60/d/w/m]"),
+        commission_rate: float = Field(0.000854, description="手续费率"),
+        slippage_min: float = Field(0.0001, description="滑点最小值"),
+        slippage_max: float = Field(0.003, description="滑点最大值"),
+        stop_loss: float = Field(None, description="止损比例，如 0.05 表示 -5%"),
+        take_profit: float = Field(None, description="止盈比例，如 0.15 表示 +15%"),
+        enable_pyramiding: bool = Field(False, description="是否启用金字塔加仓"),
+        max_pyramid_layers: int = Field(3, description="最大加仓层数(int)"),
+        pyramid_scale_factor: float = Field(0.5, description="加仓比例递减因子"),
+        realtime_indicator: bool = Field(False, description="是否使用实时指标模式"),
+        signal_priority: str = Field("buy_first", description="信号优先级: buy_first/sell_first/none"),
+    ):
+        return backtest_tools.run_backtest(
+            stock_code=stock_code,
+            start_date=start_date,
+            end_date=end_date,
+            strategy_code=strategy_code,
+            initial_capital=initial_capital,
+            frequency=frequency,
+            commission_rate=commission_rate,
+            slippage_min=slippage_min,
+            slippage_max=slippage_max,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            enable_pyramiding=enable_pyramiding,
+            max_pyramid_layers=max_pyramid_layers,
+            pyramid_scale_factor=pyramid_scale_factor,
+            realtime_indicator=realtime_indicator,
+            signal_priority=signal_priority,
+        )
+
+    @mcp.tool(
+        name="compare_strategies",
+        title="对比回测策略",
+        description="对比多个回测结果，并排显示指标对比",
+    )
+    def compare_strategies(
+        result_ids: str = Field(description="逗号分隔的回测结果 ID 列表，如: 1,2,3"),
+    ):
+        return backtest_tools.compare_strategies(result_ids=result_ids)
+
+    @mcp.tool(
+        name="register_indicator",
+        title="注册自定义指标",
+        description="注册自定义技术指标，接受指标名称、描述和函数代码",
+    )
+    def register_indicator(
+        name: str = Field(description="指标名称"),
+        description: str = Field(description="指标描述"),
+        function_code: str = Field(description="计算指标的 Python 代码，需要设置 result 变量"),
+    ):
+        return backtest_tools.register_indicator(
+            name=name,
+            description=description,
+            function_code=function_code,
+        )
+
+    @mcp.tool(
+        name="evaluate_signals",
+        title="评估技术信号",
+        description="评估指定股票在特定日期的技术信号状态，包括 MACD、KDJ、RSI、BOLL 等",
+    )
+    def evaluate_signals(
+        stock_code: str = Field(description="股票代码，格式: sh.XXXXXX 或 sz.XXXXXX"),
+        date: str = Field("", description="评估日期，格式: YYYY-MM-DD，默认为最近交易日"),
+    ):
+        return backtest_tools.evaluate_signals(stock_code=stock_code, date=date)
+
     logger.info("All tools registered successfully")
 
 
