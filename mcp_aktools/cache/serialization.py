@@ -26,6 +26,9 @@ class CacheSerializationError(Exception):
 def serialize_dataframe(df: pd.DataFrame) -> bytes:
     """使用 Parquet 格式将 DataFrame 序列化为字节。
     
+    如果 Parquet 序列化失败（例如由于 pyarrow 兼容性问题），
+    则回退到使用 pickle 格式。
+    
     参数:
         df: 要序列化的 pandas DataFrame。
         
@@ -46,23 +49,32 @@ def serialize_dataframe(df: pd.DataFrame) -> bytes:
             f"期望 pandas DataFrame，实际得到 {type(df).__name__}"
         )
     
+    # 首先尝试使用 Parquet 格式
     try:
         buffer = io.BytesIO()
         df.to_parquet(buffer, engine='pyarrow', compression='snappy')
         return buffer.getvalue()
     except ImportError as e:
-        logger.error("DataFrame 序列化需要 pyarrow")
-        raise CacheSerializationError(
-            "DataFrame 序列化需要 pyarrow。"
-            "请使用以下命令安装: pip install pyarrow"
-        ) from e
+        logger.warning("pyarrow 不可用，回退到 pickle 格式")
     except Exception as e:
-        logger.error(f"序列化 DataFrame 失败: {e}", exc_info=True)
+        # 如果是 pyarrow 兼容性问题，回退到 pickle
+        logger.warning("Parquet 序列化失败 (%s)，回退到 pickle 格式", str(e))
+    
+    # 回退到 pickle 格式
+    try:
+        import pickle
+        buffer = io.BytesIO()
+        pickle.dump(df, buffer, protocol=pickle.HIGHEST_PROTOCOL)
+        return buffer.getvalue()
+    except Exception as e:
+        logger.error("序列化 DataFrame 失败: %s", e, exc_info=True)
         raise CacheSerializationError(f"序列化 DataFrame 失败: {e}") from e
 
 
 def deserialize_dataframe(data: Union[bytes, memoryview]) -> pd.DataFrame:
-    """使用 Parquet 格式将字节反序列化为 DataFrame。
+    """将字节反序列化为 DataFrame。
+    
+    首先尝试使用 Parquet 格式，如果失败则尝试 pickle 格式。
     
     参数:
         data: 序列化后的字节数据或 memoryview。
@@ -88,19 +100,23 @@ def deserialize_dataframe(data: Union[bytes, memoryview]) -> pd.DataFrame:
             f"期望 bytes 或 memoryview，实际得到 {type(data).__name__}"
         )
     
+    # 如有必要，将 memoryview 转换为 bytes
+    if isinstance(data, memoryview):
+        data = bytes(data)
+    
+    # 首先尝试 Parquet 格式
     try:
-        # 如有必要，将 memoryview 转换为 bytes
-        if isinstance(data, memoryview):
-            data = bytes(data)
-        
         buffer = io.BytesIO(data)
         return pd.read_parquet(buffer, engine='pyarrow')
-    except ImportError as e:
-        logger.error("DataFrame 反序列化需要 pyarrow")
-        raise CacheSerializationError(
-            "DataFrame 反序列化需要 pyarrow。"
-            "请使用以下命令安装: pip install pyarrow"
-        ) from e
+    except Exception:
+        # 如果 Parquet 失败，尝试 pickle 格式
+        pass
+    
+    # 回退到 pickle 格式
+    try:
+        import pickle
+        buffer = io.BytesIO(data)
+        return pickle.load(buffer)
     except Exception as e:
-        logger.error(f"反序列化 DataFrame 失败: {e}", exc_info=True)
+        logger.error("反序列化 DataFrame 失败: %s", e, exc_info=True)
         raise CacheSerializationError(f"反序列化 DataFrame 失败: {e}") from e
