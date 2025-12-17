@@ -338,19 +338,28 @@ class RealtimeIndicatorCalculator:
     def check_macd_death_cross_strong(
         self, 
         bar_index: int, 
-        dif_threshold: float = 10.0
+        dif_threshold: float = 10.0,
+        rapid_decline_threshold: float = 0.7,
+        near_zero_threshold: float = 2.0
     ) -> bool:
-        """检查实时MACD强死叉信号。
+        """检查实时MACD强死叉信号（自适应版本）。
         
         强死叉条件：
         1. DIF下穿DEA（普通死叉）
         2. 且满足以下任一条件：
            - DIF从正变负（跨越零轴）
-           - 或者前一天DIF > dif_threshold
+           - 或者前一天DIF > dif_threshold（高位死叉）
+           - 或者DIF在零轴附近快速下降（零轴附近死叉）
+        
+        零轴附近快速下降的定义：
+        - |前一天DIF| < near_zero_threshold（在零轴附近）
+        - 且 DIF下降幅度 > rapid_decline_threshold（快速下降）
         
         Args:
             bar_index: K线索引
-            dif_threshold: DIF阈值，默认10.0
+            dif_threshold: 高位DIF阈值，默认10.0
+            rapid_decline_threshold: 快速下降阈值，默认0.7
+            near_zero_threshold: 零轴附近阈值，默认2.0
             
         Returns:
             是否触发强死叉
@@ -370,28 +379,46 @@ class RealtimeIndicatorCalculator:
         if not is_death_cross:
             return False
         
-        # 检查额外条件
-        cross_zero = (prev_dif > 0) and (dif < 0)  # DIF从正变负
-        high_dif = prev_dif > dif_threshold  # 前一天DIF > 阈值
+        # 条件1: DIF从正变负（跨越零轴）
+        cross_zero = (prev_dif > 0) and (dif < 0)
         
-        return cross_zero or high_dif
+        # 条件2: 高位死叉（前一天DIF > 阈值）
+        high_dif = prev_dif > dif_threshold
+        
+        # 条件3: 零轴附近快速下降
+        # - DIF在零轴附近（|DIF| < 2）
+        # - 且DIF快速下降（下降幅度 > 0.7）
+        near_zero = abs(prev_dif) < near_zero_threshold
+        rapid_decline = (prev_dif - dif) > rapid_decline_threshold
+        near_zero_rapid = near_zero and rapid_decline
+        
+        return cross_zero or high_dif or near_zero_rapid
     
     def check_macd_golden_cross_strong(
         self, 
         bar_index: int, 
-        dif_threshold: float = -10.0
+        dif_threshold: float = -10.0,
+        rapid_rise_threshold: float = 0.7,
+        near_zero_threshold: float = 2.0
     ) -> bool:
-        """检查实时MACD强金叉信号。
+        """检查实时MACD强金叉信号（自适应版本）。
         
         强金叉条件：
         1. DIF上穿DEA（普通金叉）
         2. 且满足以下任一条件：
            - DIF从负变正（跨越零轴）
-           - 或者前一天DIF < dif_threshold
+           - 或者前一天DIF < dif_threshold（低位金叉）
+           - 或者DIF在零轴附近快速上升（零轴附近金叉）
+        
+        零轴附近快速上升的定义：
+        - |前一天DIF| < near_zero_threshold（在零轴附近）
+        - 且 DIF上升幅度 > rapid_rise_threshold（快速上升）
         
         Args:
             bar_index: K线索引
-            dif_threshold: DIF阈值，默认-10.0
+            dif_threshold: 低位DIF阈值，默认-10.0
+            rapid_rise_threshold: 快速上升阈值，默认0.7
+            near_zero_threshold: 零轴附近阈值，默认2.0
             
         Returns:
             是否触发强金叉
@@ -411,11 +438,20 @@ class RealtimeIndicatorCalculator:
         if not is_golden_cross:
             return False
         
-        # 检查额外条件
-        cross_zero = (prev_dif < 0) and (dif > 0)  # DIF从负变正
-        low_dif = prev_dif < dif_threshold  # 前一天DIF < 阈值
+        # 条件1: DIF从负变正（跨越零轴）
+        cross_zero = (prev_dif < 0) and (dif > 0)
         
-        return cross_zero or low_dif
+        # 条件2: 低位金叉（前一天DIF < 阈值）
+        low_dif = prev_dif < dif_threshold
+        
+        # 条件3: 零轴附近快速上升
+        # - DIF在零轴附近（|DIF| < 2）
+        # - 且DIF快速上升（上升幅度 > 0.7）
+        near_zero = abs(prev_dif) < near_zero_threshold
+        rapid_rise = (dif - prev_dif) > rapid_rise_threshold
+        near_zero_rapid = near_zero and rapid_rise
+        
+        return cross_zero or low_dif or near_zero_rapid
     
     def clear_cache(self) -> None:
         """清空缓存。"""

@@ -45,6 +45,7 @@ class BacktestEngine:
         """
         self.config = config
         self.data: Optional[pd.DataFrame] = None
+        self.full_data: Optional[pd.DataFrame] = None  # 完整数据（包含预热期）
         self.signal_calculator: Optional[SignalCalculator] = None
         self._akshare_client: Optional[AkShareClient] = None
         
@@ -158,6 +159,9 @@ class BacktestEngine:
             # 先计算技术指标（使用完整的扩展数据，确保指标计算准确）
             # 注意：必须在过滤日期范围之前计算，否则 MACD/KDJ 等指标会因数据不足而不准确
             self._calculate_indicators(df)
+            
+            # 保存完整数据（用于实时指标计算）
+            self.full_data = df.copy()
             
             # 过滤日期范围（在计算指标之后）
             df = self._filter_date_range(df)
@@ -879,7 +883,19 @@ class BacktestEngine:
         # 如果启用实时指标模式，初始化实时指标计算器
         if self.config.realtime_indicator:
             from .realtime_indicators import RealtimeIndicatorCalculator
-            strategy._realtime_calculator = RealtimeIndicatorCalculator(self.data)
+            # 使用完整数据（包含预热期）进行实时指标计算
+            strategy._realtime_calculator = RealtimeIndicatorCalculator(self.full_data)
+            
+            # 创建索引映射：self.data的索引 -> self.full_data的索引
+            # 通过日期匹配来建立映射关系
+            self._index_map = {}
+            for i in range(len(self.data)):
+                date = self.data.iloc[i]['date']
+                # 在full_data中查找相同日期的索引
+                full_idx = self.full_data[self.full_data['date'] == date].index
+                if len(full_idx) > 0:
+                    self._index_map[i] = full_idx[0]
+            
             logger.info("已启用实时指标模式（开盘价模式）")
 
         # 权益曲线列表
@@ -897,6 +913,10 @@ class BacktestEngine:
             # 更新策略的当前K线引用
             strategy._current_bar = bar
             strategy._current_index = i
+            
+            # 如果启用实时模式，设置映射后的完整数据索引
+            if self.config.realtime_indicator and hasattr(self, '_index_map'):
+                strategy._full_data_index = self._index_map.get(i, i)
 
             # 获取历史数据（包含当前K线）
             history = self.data.iloc[:i + 1]

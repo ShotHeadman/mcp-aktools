@@ -204,7 +204,9 @@ class Strategy(ABC):
         
         # 如果启用了实时指标模式，优先使用实时计算器
         if self.config.realtime_indicator and self._realtime_calculator is not None:
-            value = self._realtime_calculator.get_indicator(self._current_index, name)
+            # 使用映射后的完整数据索引
+            idx = getattr(self, '_full_data_index', self._current_index)
+            value = self._realtime_calculator.get_indicator(idx, name)
             if value is not None:
                 return value
         
@@ -322,18 +324,17 @@ class Strategy(ABC):
         if self._realtime_calculator is None:
             return False
         
+        # 使用映射后的完整数据索引
+        idx = getattr(self, '_full_data_index', self._current_index)
+        
         try:
             if indicator == "macd":
                 if signal_type == "death_cross_strong":
-                    return self._realtime_calculator.check_macd_death_cross_strong(
-                        self._current_index
-                    )
+                    return self._realtime_calculator.check_macd_death_cross_strong(idx)
                 elif signal_type == "golden_cross_strong":
-                    return self._realtime_calculator.check_macd_golden_cross_strong(
-                        self._current_index
-                    )
+                    return self._realtime_calculator.check_macd_golden_cross_strong(idx)
                 # 普通金叉/死叉需要检查前后DIF/DEA关系
-                indicators = self._realtime_calculator.calculate_at_open(self._current_index)
+                indicators = self._realtime_calculator.calculate_at_open(idx)
                 dif = indicators.get('DIF')
                 dea = indicators.get('DEA')
                 prev_dif = indicators.get('_prev_DIF')
@@ -348,7 +349,7 @@ class Strategy(ABC):
                     return (prev_dif >= prev_dea) and (dif < dea)
             
             elif indicator == "rsi":
-                rsi = self._realtime_calculator.get_indicator(self._current_index, 'RSI')
+                rsi = self._realtime_calculator.get_indicator(idx, 'RSI')
                 if rsi is None:
                     return False
                 if signal_type == "overbought":
