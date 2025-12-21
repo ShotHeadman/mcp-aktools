@@ -17,3 +17,4 @@ app.log
 
 # Data directory (cache database)
 data/
+.kiro/settings/mcp.json
