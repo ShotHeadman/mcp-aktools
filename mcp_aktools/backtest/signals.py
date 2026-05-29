@@ -209,7 +209,7 @@ class SignalCalculator:
         return self._crossunder(self.data[dif_col], self.data[dea_col], index)
 
     
-    def macd_death_cross_strong(self, index: int, dif_threshold: float = 10.0,
+    def macd_death_cross_strong(self, index: int, dif_threshold: Optional[float] = None,
                                 frequency: str = "d") -> bool:
         """MACD强死叉判断（支持自适应阈值）。
         
@@ -261,10 +261,10 @@ class SignalCalculator:
         # 检查额外条件
         cross_zero = (prev_dif > 0) and (curr_dif < 0)  # DIF从正变负
         high_dif = prev_dif > dif_threshold  # DIF > 阈值
-        
-        return cross_zero or high_dif
+
+        return bool(cross_zero or high_dif)
     
-    def macd_golden_cross_strong(self, index: int, dif_threshold: float = -10.0,
+    def macd_golden_cross_strong(self, index: int, dif_threshold: Optional[float] = None,
                                  frequency: str = "d") -> bool:
         """MACD强金叉判断（支持自适应阈值）。
         
@@ -316,8 +316,8 @@ class SignalCalculator:
         # 检查额外条件
         cross_zero = (prev_dif < 0) and (curr_dif > 0)  # DIF从负变正
         low_dif = prev_dif < dif_threshold  # DIF < 阈值
-        
-        return cross_zero or low_dif
+
+        return bool(cross_zero or low_dif)
     
     def kdj_golden_cross(self, index: int) -> bool:
         """KDJ金叉判断。
@@ -507,18 +507,21 @@ class SignalCalculator:
         
         # 检查自定义指标
         if condition in self.custom_indicators:
-            indicator = self.custom_indicators[condition]
-            try:
-                result = indicator.calculate(self.data)
-                if index < len(result):
-                    value = result.iloc[index]
-                    # 如果是布尔值直接返回，否则返回是否为真值
-                    if isinstance(value, (bool, np.bool_)):
-                        return bool(value)
-                    return bool(value) if not pd.isna(value) else False
-            except Exception as e:
-                logger.error(f"自定义指标 {condition} 计算失败: {e}")
-                return False
+            # 优先读取注册时已计算并缓存到 DataFrame 的列，避免每次重新 exec 用户代码
+            if condition in self.data.columns:
+                series = self.data[condition]
+            else:
+                try:
+                    series = self.custom_indicators[condition].calculate(self.data)
+                except Exception as e:
+                    logger.error(f"自定义指标 {condition} 计算失败: {e}")
+                    return False
+            if index < len(series):
+                value = series.iloc[index]
+                # 如果是布尔值直接返回，否则返回是否为真值
+                if isinstance(value, (bool, np.bool_)):
+                    return bool(value)
+                return bool(value) if not pd.isna(value) else False
         
         logger.warning(f"未知的信号条件: {condition}")
         return False

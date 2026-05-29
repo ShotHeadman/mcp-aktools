@@ -8,9 +8,12 @@
 """
 
 import logging
+import math
+from collections import deque
 from datetime import datetime
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 
 from ..clients.akshare import AkShareClient
@@ -674,6 +677,24 @@ class BacktestEngine:
             return str(date_val)
         return datetime.now().strftime("%Y-%m-%d")
 
+    def _get_risk_reference_price(self, bar: pd.Series) -> float:
+        """获取止损止盈的风控参考价。
+
+        实时（开盘价）模式下，风控决策发生在开盘时，只能使用开盘价，
+        避免用当根收盘价造成未来函数；标准（收盘价）模式使用收盘价。
+
+        Args:
+            bar: 当前K线数据
+
+        Returns:
+            风控参考价
+        """
+        if self.config.realtime_indicator:
+            open_price = float(bar.get("open", 0))
+            if open_price > 0:
+                return open_price
+        return float(bar.get("close", 0))
+
     def _check_stop_loss_take_profit(
         self,
         strategy: Strategy,
@@ -683,6 +704,7 @@ class BacktestEngine:
         """检查止损止盈条件并自动平仓。
 
         当持仓盈亏比例达到止损或止盈阈值时，自动平仓。
+        盈亏比例按风控参考价计算（实时模式开盘价 / 标准模式收盘价）。
 
         Args:
             strategy: 策略实例
@@ -693,16 +715,16 @@ class BacktestEngine:
             如果触发止损止盈则返回交易记录，否则返回 None
         """
         # 检查是否有持仓
-        if not strategy.has_position:
+        if not strategy.has_position or strategy.position.avg_cost <= 0:
             return None
 
-        # 获取当前价格
-        current_price = float(bar.get("close", 0))
-        if current_price <= 0:
+        # 获取风控参考价
+        ref_price = self._get_risk_reference_price(bar)
+        if ref_price <= 0:
             return None
 
-        # 计算持仓盈亏比例
-        pnl_ratio = strategy.position_pnl_ratio
+        # 按风控参考价计算持仓盈亏比例
+        pnl_ratio = (ref_price - strategy.position.avg_cost) / strategy.position.avg_cost
 
         # 检查止损条件
         if self.config.stop_loss is not None:
@@ -751,10 +773,10 @@ class BacktestEngine:
         if not strategy.has_position:
             return None
 
-        # 获取收盘价
-        price = float(bar.get("close", 0))
+        # 获取平仓参考价（实时模式用开盘价，标准模式用收盘价）
+        price = self._get_risk_reference_price(bar)
         if price <= 0:
-            logger.warning("无效的收盘价，无法平仓")
+            logger.warning("无效的平仓参考价，无法平仓")
             return None
 
         # 应用滑点（卖出时价格下滑）
@@ -873,6 +895,9 @@ class BacktestEngine:
         # 重置熔断状态
         self.reset_circuit_breaker()
 
+        # 重置滑点随机数发生器，确保相同 random_seed 下回测结果可复现
+        self.config.reset_rng()
+
         # 创建策略实例
         strategy = strategy_class(self.config)
 
@@ -887,14 +912,14 @@ class BacktestEngine:
             strategy._realtime_calculator = RealtimeIndicatorCalculator(self.full_data)
             
             # 创建索引映射：self.data的索引 -> self.full_data的索引
-            # 通过日期匹配来建立映射关系
-            self._index_map = {}
-            for i in range(len(self.data)):
-                date = self.data.iloc[i]['date']
-                # 在full_data中查找相同日期的索引
-                full_idx = self.full_data[self.full_data['date'] == date].index
-                if len(full_idx) > 0:
-                    self._index_map[i] = full_idx[0]
+            # 一次性构建 日期→full_data索引 映射表，避免每根K线全表扫描（O(n²)→O(n)）
+            # K线日期唯一，dict 直接以日期为键
+            date_to_full_idx = dict(zip(self.full_data['date'], self.full_data.index))
+            self._index_map = {
+                i: date_to_full_idx[d]
+                for i, d in enumerate(self.data['date'])
+                if d in date_to_full_idx
+            }
             
             logger.info("已启用实时指标模式（开盘价模式）")
 
@@ -957,9 +982,6 @@ class BacktestEngine:
             # 记录当前权益
             current_equity = strategy.total_equity
             equity_curve.append(current_equity)
-
-            # 更新峰值权益（用于熔断检查）
-            self._peak_equity = max(self._peak_equity, current_equity)
 
         logger.info(
             f"回测完成: 最终权益={strategy.total_equity:,.2f}, "
@@ -1045,24 +1067,40 @@ class BacktestEngine:
         if not equity_curve:
             return 0.0
 
-        max_drawdown = 0.0
-        peak = equity_curve[0]
+        eq = np.asarray(equity_curve, dtype=float)
+        running_peak = np.maximum.accumulate(eq)
+        # 仅在峰值为正处计算回撤，避免除零
+        valid = running_peak > 0
+        if not valid.any():
+            return 0.0
+        drawdowns = (running_peak[valid] - eq[valid]) / running_peak[valid]
+        return float(np.max(drawdowns))
 
-        for equity in equity_curve:
-            # 更新峰值
-            if equity > peak:
-                peak = equity
-            # 计算当前回撤
-            if peak > 0:
-                drawdown = (peak - equity) / peak
-                max_drawdown = max(max_drawdown, drawdown)
+    def _get_annualization_factor(self) -> float:
+        """根据K线频率返回年化因子（每年的周期数）。
 
-        return max_drawdown
+        - 日线 252（交易日）；周线 52；月线 12
+        - 分钟线按每日 240 分钟 / 周期分钟数 × 252 个交易日
+
+        Returns:
+            年化因子
+        """
+        freq = self.config.frequency
+        if freq == "d":
+            return 252.0
+        if freq == "w":
+            return 52.0
+        if freq == "m":
+            return 12.0
+        if freq.isdigit():
+            bars_per_day = max(1, 240 // int(freq))
+            return 252.0 * bars_per_day
+        return 252.0
 
     def _calculate_volatility(self, equity_curve: List[float]) -> float:
         """计算年化波动率。
 
-        使用日收益率的标准差计算，然后年化（假设252个交易日）。
+        使用周期收益率的标准差，再按K线频率对应的年化因子年化。
 
         Args:
             equity_curve: 权益曲线列表
@@ -1070,31 +1108,21 @@ class BacktestEngine:
         Returns:
             年化波动率
         """
-        import math
-
         if len(equity_curve) < 2:
             return 0.0
 
-        # 计算日收益率
-        daily_returns = []
-        for i in range(1, len(equity_curve)):
-            if equity_curve[i - 1] > 0:
-                ret = (equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]
-                daily_returns.append(ret)
-
-        if not daily_returns:
+        eq = np.asarray(equity_curve, dtype=float)
+        prev = eq[:-1]
+        # 仅对前值为正的区间计算收益率，避免除零
+        mask = prev > 0
+        if not mask.any():
+            return 0.0
+        returns = (eq[1:][mask] - prev[mask]) / prev[mask]
+        if returns.size < 1:
             return 0.0
 
-        # 计算标准差
-        n = len(daily_returns)
-        mean = sum(daily_returns) / n
-        variance = sum((r - mean) ** 2 for r in daily_returns) / n
-        std_dev = math.sqrt(variance)
-
-        # 年化（假设252个交易日）
-        annualized_volatility = std_dev * math.sqrt(252)
-
-        return annualized_volatility
+        std_dev = float(np.std(returns))  # 总体标准差（ddof=0），与原实现口径一致
+        return std_dev * math.sqrt(self._get_annualization_factor())
 
     def _calculate_sharpe_ratio(
         self,
@@ -1151,39 +1179,53 @@ class BacktestEngine:
         if not trades:
             return 0.0, 0.0
 
-        # 配对买卖交易计算盈亏
-        buy_trades = []
-        profits = []
-        losses = []
+        # 维护未平仓买入份额队列（FIFO），每项: [price, remaining_qty, commission_per_share]
+        # 按"份额"逐手配对，正确处理部分成交与金字塔加仓（买卖数量可能不等）
+        open_buys: deque = deque()
+        profits: List[float] = []
+        losses: List[float] = []
 
         for trade in trades:
-            if trade.action == "BUY":
-                buy_trades.append(trade)
-            elif trade.action == "SELL" and buy_trades:
-                # 使用FIFO方式配对
-                buy_trade = buy_trades.pop(0)
-                # 计算这笔交易的盈亏
-                pnl = (trade.price - buy_trade.price) * trade.quantity
-                pnl -= (trade.commission + buy_trade.commission)
+            if trade.quantity <= 0:
+                continue
 
+            if trade.action == "BUY":
+                comm_per_share = trade.commission / trade.quantity
+                open_buys.append([trade.price, trade.quantity, comm_per_share])
+            elif trade.action == "SELL":
+                sell_qty = trade.quantity
+                sell_comm_per_share = trade.commission / trade.quantity
+                pnl = 0.0
+                # 一笔卖出可能跨多笔买入配对
+                while sell_qty > 0 and open_buys:
+                    buy = open_buys[0]
+                    matched = min(sell_qty, buy[1])
+                    # 价差盈亏，并扣除买入与卖出手续费（按配对份额分摊）
+                    pnl += (trade.price - buy[0]) * matched
+                    pnl -= buy[2] * matched
+                    pnl -= sell_comm_per_share * matched
+                    buy[1] -= matched
+                    sell_qty -= matched
+                    if buy[1] <= 0:
+                        open_buys.popleft()
+                # 按每笔卖出（平仓）的净盈亏统计胜负
                 if pnl > 0:
                     profits.append(pnl)
                 elif pnl < 0:
                     losses.append(abs(pnl))
 
-        # 计算胜率
+        # 计算胜率（按已平仓的卖出笔数）
         total_closed = len(profits) + len(losses)
         win_rate = len(profits) / total_closed if total_closed > 0 else 0.0
 
-        # 计算盈亏比
-        total_profit = sum(profits) if profits else 0.0
-        total_loss = sum(losses) if losses else 0.0
-        profit_factor = total_profit / total_loss if total_loss > 0 else (
-            float('inf') if total_profit > 0 else 0.0
-        )
-
-        # 如果盈亏比为无穷大，设置为一个较大的值
-        if profit_factor == float('inf'):
-            profit_factor = 999.99
+        # 计算盈亏比（总盈利 / 总亏损）
+        total_profit = sum(profits)
+        total_loss = sum(losses)
+        if total_loss > 0:
+            profit_factor = total_profit / total_loss
+        elif total_profit > 0:
+            profit_factor = 999.99  # 无亏损交易，记为较大值
+        else:
+            profit_factor = 0.0
 
         return win_rate, profit_factor

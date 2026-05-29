@@ -283,9 +283,13 @@ class Strategy(ABC):
                 elif signal_type == "death_cross":
                     return self._signal_calculator.macd_death_cross(self._current_index)
                 elif signal_type == "death_cross_strong":
-                    return self._signal_calculator.macd_death_cross_strong(self._current_index)
+                    return self._signal_calculator.macd_death_cross_strong(
+                        self._current_index, frequency=self.config.frequency
+                    )
                 elif signal_type == "golden_cross_strong":
-                    return self._signal_calculator.macd_golden_cross_strong(self._current_index)
+                    return self._signal_calculator.macd_golden_cross_strong(
+                        self._current_index, frequency=self.config.frequency
+                    )
             
             elif indicator == "kdj":
                 if signal_type == "golden_cross":

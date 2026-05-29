@@ -369,6 +369,7 @@ def register_tools(mcp: FastMCP) -> None:
         pyramid_scale_factor: float = Field(0.5, description="加仓比例递减因子"),
         realtime_indicator: bool = Field(False, description="是否使用实时指标模式"),
         signal_priority: str = Field("buy_first", description="信号优先级: buy_first/sell_first/none"),
+        random_seed: int = Field(None, description="随机种子，设置后滑点可复现，便于复现与策略对比"),
     ):
         return backtest_tools.run_backtest(
             stock_code=stock_code,
@@ -387,6 +388,7 @@ def register_tools(mcp: FastMCP) -> None:
             pyramid_scale_factor=pyramid_scale_factor,
             realtime_indicator=realtime_indicator,
             signal_priority=signal_priority,
+            random_seed=random_seed,
         )
 
     @mcp.tool(

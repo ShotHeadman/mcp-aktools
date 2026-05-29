@@ -15,7 +15,16 @@ from typing import Optional, Tuple
 import numpy as np
 import pandas as pd
 
+try:
+    import pandas_ta as ta
+except ImportError:
+    ta = None
+
 logger = logging.getLogger(__name__)
+
+# 实时指标滑动窗口：仅用最近 N 根历史计算。EMA/RSI/KDJ/BOLL 权重随距离快速衰减，
+# 窗口足够大时与全量计算数值等价，从而把每根K线的 O(n) 重算降为常数窗口（总体 ~O(n)）
+_REALTIME_WINDOW = 300
 
 
 def calc_ema(series: pd.Series, span: int) -> pd.Series:
@@ -96,9 +105,7 @@ def calc_kdj_realtime(
     Returns:
         (K, D, J) 或 (None, None, None) 如果数据不足
     """
-    try:
-        import pandas_ta as ta
-    except ImportError:
+    if ta is None:
         logger.warning("pandas-ta 未安装，无法计算实时KDJ")
         return None, None, None
     
@@ -149,9 +156,7 @@ def calc_rsi_realtime(
     Returns:
         RSI值，如果数据不足返回None
     """
-    try:
-        import pandas_ta as ta
-    except ImportError:
+    if ta is None:
         logger.warning("pandas-ta 未安装，无法计算实时RSI")
         return None
     
@@ -184,9 +189,7 @@ def calc_boll_realtime(
     Returns:
         (上轨, 中轨, 下轨) 或 (None, None, None) 如果数据不足
     """
-    try:
-        import pandas_ta as ta
-    except ImportError:
+    if ta is None:
         logger.warning("pandas-ta 未安装，无法计算实时BOLL")
         return None, None, None
     
@@ -241,9 +244,11 @@ class RealtimeIndicatorCalculator:
         
         if bar_index < 1:
             return {}
-        
+
         # 获取历史数据和当天开盘价
-        history = self.data.iloc[:bar_index]
+        # 仅取最近 _REALTIME_WINDOW 根历史，避免每根K线复制全量历史（O(n²)→~O(n)）
+        start = max(0, bar_index - _REALTIME_WINDOW)
+        history = self.data.iloc[start:bar_index]
         current_bar = self.data.iloc[bar_index]
         current_open = float(current_bar['open'])
         
@@ -391,8 +396,8 @@ class RealtimeIndicatorCalculator:
         near_zero = abs(prev_dif) < near_zero_threshold
         rapid_decline = (prev_dif - dif) > rapid_decline_threshold
         near_zero_rapid = near_zero and rapid_decline
-        
-        return cross_zero or high_dif or near_zero_rapid
+
+        return bool(cross_zero or high_dif or near_zero_rapid)
     
     def check_macd_golden_cross_strong(
         self, 
@@ -450,8 +455,8 @@ class RealtimeIndicatorCalculator:
         near_zero = abs(prev_dif) < near_zero_threshold
         rapid_rise = (dif - prev_dif) > rapid_rise_threshold
         near_zero_rapid = near_zero and rapid_rise
-        
-        return cross_zero or low_dif or near_zero_rapid
+
+        return bool(cross_zero or low_dif or near_zero_rapid)
     
     def clear_cache(self) -> None:
         """清空缓存。"""
