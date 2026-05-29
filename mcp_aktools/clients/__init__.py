@@ -2,7 +2,5 @@
 
 from .akshare import AkShareClient
 from .base import BaseAPIClient
-from .binance import BinanceClient
-from .okx import OKXClient
 
-__all__ = ["BaseAPIClient", "AkShareClient", "OKXClient", "BinanceClient"]
+__all__ = ["BaseAPIClient", "AkShareClient"]

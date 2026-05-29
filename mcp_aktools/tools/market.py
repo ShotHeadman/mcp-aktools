@@ -677,6 +677,8 @@ def stock_individual_fund_flow(
     logger.info(f"获取个股资金流向: symbol={symbol}, market={market}")
 
     try:
+        symbol, market = _normalize_a_stock_symbol_market(symbol, market)
+
         # 验证市场参数
         valid_markets = ["sh", "sz"]
         if market not in valid_markets:
@@ -715,7 +717,53 @@ def stock_individual_fund_flow(
         return f"参数错误: {e.message}"
     except Exception as e:
         logger.error(f"获取个股资金流向失败: {e}", exc_info=True)
-        return f"获取失败: {str(e)}"
+        fallback = _stock_fund_flow_fallback(symbol=symbol, error=e)
+        if fallback is not None:
+            return fallback
+        return f"获取失败: 数据源暂不可用 ({type(e).__name__})"
+
+
+def _normalize_a_stock_symbol_market(symbol: str, market: object) -> tuple[str, str]:
+    """Normalize A-share symbol/market inputs for tool and direct function calls."""
+    symbol = Validators.validate_symbol(str(symbol)).lower()
+
+    if symbol.startswith(("sh", "sz")) and len(symbol) >= 8:
+        return symbol[2:], symbol[:2]
+
+    if "." in symbol:
+        code, suffix = symbol.split(".", 1)
+        if suffix in {"sh", "sz"}:
+            return code, suffix
+
+    if isinstance(market, str):
+        normalized_market = market.strip().lower()
+    else:
+        normalized_market = ""
+
+    if normalized_market not in {"sh", "sz"}:
+        normalized_market = "sh" if symbol.startswith(("5", "6", "9")) else "sz"
+
+    return symbol, normalized_market
+
+
+def _stock_fund_flow_fallback(symbol: str, error: Exception) -> Optional[str]:
+    """Return intraday tick-flow summary when historical fund-flow source fails."""
+    try:
+        from .stock import stock_tick_data
+
+        tick_summary = stock_tick_data(symbol=symbol, filter_type="summary", min_volume=500)
+        if tick_summary.startswith("获取失败") or tick_summary.startswith("Not Found"):
+            return None
+        return (
+            f"# 个股资金流向降级结果 (股票代码: {symbol})\n\n"
+            "历史资金流向数据源暂不可用，已返回最近交易日分笔成交买卖盘统计，"
+            "可作为当日资金流强弱的替代参考。\n\n"
+            f"原始错误类型: {type(error).__name__}\n\n"
+            f"{tick_summary}"
+        )
+    except Exception as fallback_error:
+        logger.warning("个股资金流向降级查询失败: %s", fallback_error, exc_info=True)
+        return None
 
 
 def stock_zt_pool_zbgc_em(

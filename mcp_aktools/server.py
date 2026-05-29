@@ -33,19 +33,18 @@ def register_tools(mcp: FastMCP) -> None:
     field_symbol = Field(description="股票代码")
     field_market = Field(
         "sh",
-        description="股票市场，仅支持: sh(上证), sz(深证), hk(港股), us(美股), 不支持加密货币",
+        description="股票市场，仅支持: sh(上证), sz(深证), hk(港股), us(美股)",
     )
 
-    from .tools import crypto as crypto_tools
     from .tools import market as market_tools
     from .tools import news as news_tools
     from .tools import stock as stock_tools
 
-    logger.info("Registering tools from modules: stock, crypto, market, news")
+    logger.info("Registering tools from modules: stock, market, news")
 
     @mcp.tool(
         title="查找股票代码",
-        description="根据股票名称、公司名称等关键词查找股票代码, 不支持加密货币。"
+        description="根据股票名称、公司名称等关键词查找股票代码。"
         "该工具比较耗时，当你知道股票代码或用户已指定股票代码时，建议直接通过股票代码使用其他工具",
     )
     def search(
@@ -58,7 +57,7 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         title="获取股票信息",
-        description="根据股票代码和市场获取股票基本信息, 不支持加密货币",
+        description="根据股票代码和市场获取股票基本信息",
     )
     def stock_info(
         symbol: str = field_symbol,
@@ -70,7 +69,7 @@ def register_tools(mcp: FastMCP) -> None:
         title="获取股票历史价格",
         description="根据股票代码和市场获取股票日线或周线级别的历史价格及技术指标。"
         "此接口用于获取日线(daily)或周线(weekly)数据，不适用于分钟级别数据。"
-        "如需分钟级别的分时数据，请使用 stock_zh_a_minute 接口。不支持加密货币。"
+        "如需分钟级别的分时数据，请使用 stock_zh_a_minute 接口。"
         "可通过ma_periods添加均线系统，如常用均线5,10,20,30,60,120,250或斐波那契均线5,8,13,21,34,55,89,144,233。"
         "可通过include_trend添加趋势指标(BBI/TREND/LINREG/SLOPE)。",
     )
@@ -154,66 +153,6 @@ def register_tools(mcp: FastMCP) -> None:
         return stock_tools.stock_tick_data(
             symbol=symbol, filter_type=filter_type, min_volume=min_volume
         )
-
-    @mcp.tool(
-        title="获取加密货币历史价格",
-        description="获取OKX加密货币的历史K线数据，包括价格、交易量和技术指标",
-    )
-    def okx_prices(
-        instId: str = Field("BTC-USDT", description="产品ID，格式: BTC-USDT"),
-        bar: str = Field(
-            "1H",
-            description="K线时间粒度，仅支持: [1m/3m/5m/15m/30m/1H/2H/4H/6H/12H/1D/2D/3D/1W/1M/3M] 除分钟为小写m外,其余均为大写",
-        ),
-        limit: int = Field(
-            100, description="返回数量(int)，最大300，最小建议30", strict=False
-        ),
-        response_format: str = Field("json", description="返回格式: json 或 csv"),
-    ):
-        return crypto_tools.okx_prices(
-            inst_id=instId,
-            bar=bar,
-            limit=limit,
-            response_format=response_format,
-        )
-
-    @mcp.tool(
-        title="获取加密货币杠杆多空比",
-        description="获取OKX加密货币借入计价货币与借入交易货币的累计数额比值",
-    )
-    def okx_loan_ratios(
-        symbol: str = Field("BTC", description="币种，格式: BTC 或 ETH"),
-        period: str = Field(
-            "1H", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"
-        ),
-    ):
-        return crypto_tools.okx_loan_ratios(symbol=symbol, period=period)
-
-    @mcp.tool(
-        title="获取加密货币主动买卖情况",
-        description="获取OKX加密货币主动买入和卖出的交易量",
-    )
-    def okx_taker_volume(
-        symbol: str = Field("BTC", description="币种，格式: BTC 或 ETH"),
-        period: str = Field(
-            "1H", description="时间粒度，仅支持: [5m/1H/1D] 注意大小写，仅分钟为小写m"
-        ),
-        instType: str = Field(
-            "SPOT", description="产品类型 SPOT:现货 CONTRACTS:衍生品"
-        ),
-    ):
-        return crypto_tools.okx_taker_volume(
-            symbol=symbol, period=period, inst_type=instType
-        )
-
-    @mcp.tool(
-        title="获取加密货币分析报告",
-        description="获取币安对加密货币的AI分析报告，此工具对分析加密货币非常有用，推荐使用",
-    )
-    def binance_ai_report(
-        symbol: str = Field("BTC", description="加密货币币种，格式: BTC 或 ETH"),
-    ):
-        return crypto_tools.binance_ai_report(symbol=symbol)
 
     @mcp.tool(
         title="获取当前时间及A股交易日信息",
@@ -308,11 +247,11 @@ def register_tools(mcp: FastMCP) -> None:
         return market_tools.stock_individual_fund_flow(symbol=symbol, market=market)
 
     @mcp.tool(
-        title="获取股票/加密货币相关新闻",
-        description="根据股票代码或加密货币符号获取近期相关新闻",
+        title="获取股票相关新闻",
+        description="根据股票代码获取近期相关新闻",
     )
     def stock_news(
-        symbol: str = Field(description="股票代码/加密货币符号"),
+        symbol: str = Field(description="股票代码"),
         limit: int = Field(15, description="返回数量(int)", strict=False),
     ):
         return news_tools.stock_news(symbol=symbol, limit=limit)
@@ -341,7 +280,7 @@ def register_tools(mcp: FastMCP) -> None:
         description="基于AI对其他工具提供的数据分析结果给出具体投资建议。注意：应先调用 get_trading_rules 获取用户配置的交易规则，并以此为最高基准进行判断",
     )
     def trading_suggest(
-        symbol: str = Field(description="股票代码或加密币种"),
+        symbol: str = Field(description="股票代码"),
         action: str = Field(description="推荐操作: buy/sell/hold"),
         score: int = Field(description="置信度，范围: 0-100"),
         reason: str = Field(description="推荐理由"),

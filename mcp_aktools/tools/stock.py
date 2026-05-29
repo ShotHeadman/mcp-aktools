@@ -51,7 +51,7 @@ def get_akshare_client() -> AkShareClient:
 field_symbol = Field(description="股票代码")
 field_market = Field(
     "sh",
-    description="股票市场，仅支持: sh(上证), sz(深证), hk(港股), us(美股), 不支持加密货币",
+    description="股票市场，仅支持: sh(上证), sz(深证), hk(港股), us(美股)",
 )
 
 
@@ -64,8 +64,6 @@ def search(
     """根据股票名称、公司名称等关键词查找股票代码。
 
     该工具比较耗时，当你知道股票代码或用户已指定股票代码时，建议直接通过股票代码使用其他工具。
-    不支持加密货币。
-
     Args:
         keyword: 搜索关键词
         market: 市场类型（sh/sz/hk/us）
@@ -99,8 +97,6 @@ def stock_info(
     market: str = field_market,
 ) -> str:
     """根据股票代码和市场获取股票基本信息。
-
-    不支持加密货币。
 
     Args:
         symbol: 股票代码
@@ -142,7 +138,10 @@ def stock_info(
         return f"参数错误: {e.message}"
     except Exception as e:
         logger.error(f"获取股票信息失败: {e}", exc_info=True)
-        return f"获取失败: {str(e)}"
+        fallback = _stock_info_fallback(symbol=symbol, market=market, error=e)
+        if fallback is not None:
+            return fallback
+        return f"获取失败: 数据源暂不可用 ({type(e).__name__})"
 
 
 def stock_prices(
@@ -157,8 +156,6 @@ def stock_prices(
     response_format: str = Field("json", description="返回格式: json 或 csv"),
 ) -> Any:
     """根据股票代码和市场获取股票历史价格及技术指标。
-
-    不支持加密货币。
 
     Args:
         symbol: 股票代码
@@ -725,6 +722,66 @@ def stock_tick_data(
 
 
 # 辅助函数
+
+
+def _stock_info_fallback(symbol: str, market: str, error: Exception) -> Optional[str]:
+    """Return basic stock information from resilient quote/name sources."""
+    try:
+        logger.warning(
+            "股票基本信息主接口不可用，尝试实时行情/代码表降级: symbol=%s, market=%s, error=%s",
+            symbol,
+            market,
+            error,
+        )
+        rows = [
+            {"项目": "股票代码", "值": symbol},
+            {"项目": "交易市场", "值": market},
+            {"项目": "数据说明", "值": "主接口暂不可用，以下为实时行情和代码表降级信息"},
+        ]
+
+        try:
+            client = get_akshare_client()
+            spot_df = client.call(ak.stock_zh_a_spot, ttl=60)
+            if spot_df is not None and not spot_df.empty:
+                full_symbol = f"{market}{symbol}".lower()
+                match = spot_df[spot_df["代码"].astype(str).str.lower() == full_symbol]
+                if match.empty:
+                    match = spot_df[spot_df["代码"].astype(str).str[-6:] == symbol]
+                if not match.empty:
+                    record = match.iloc[0].to_dict()
+                    for key in [
+                        "名称",
+                        "最新价",
+                        "涨跌额",
+                        "涨跌幅",
+                        "昨收",
+                        "今开",
+                        "最高",
+                        "最低",
+                        "成交量",
+                        "成交额",
+                        "时间戳",
+                    ]:
+                        if key in record:
+                            rows.append({"项目": key, "值": record[key]})
+        except Exception as spot_error:
+            logger.warning("股票实时行情降级源失败: %s", spot_error)
+
+        try:
+            info = _ak_search(symbol=symbol, keyword=None, market=market)
+            if info is not None:
+                existing_keys = {row["项目"] for row in rows}
+                for key, value in info.to_dict().items():
+                    if key not in existing_keys:
+                        rows.append({"项目": key, "值": value})
+        except Exception as search_error:
+            logger.warning("股票代码表降级源失败: %s", search_error)
+
+        if len(rows) > 3:
+            return pd.DataFrame(rows).to_string(index=False)
+    except Exception as fallback_error:
+        logger.warning("股票信息降级查询失败: %s", fallback_error, exc_info=True)
+    return None
 
 
 def _normalize_sina_columns(df: pd.DataFrame) -> pd.DataFrame:

@@ -1,7 +1,7 @@
 """新闻资讯工具函数。
 
 此模块包含所有新闻相关的 MCP 工具函数，包括：
-- 股票/加密货币相关新闻
+- 股票相关新闻
 - 全球财经快讯
 """
 
@@ -39,13 +39,13 @@ def get_akshare_client() -> AkShareClient:
 
 
 def stock_news(
-    symbol: str = Field(description="股票代码/加密货币符号"),
+    symbol: str = Field(description="股票代码"),
     limit: int = Field(15, description="返回数量(int)", strict=False),
 ) -> str:
-    """根据股票代码或加密货币符号获取近期相关新闻。
+    """根据股票代码获取近期相关新闻。
 
     Args:
-        symbol: 股票代码或加密货币符号
+        symbol: 股票代码
         limit: 返回的新闻数量
 
     Returns:
@@ -150,7 +150,7 @@ def _stock_news_em(symbol: str, limit: int = 20) -> Optional[pd.DataFrame]:
     此函数通过东方财富的搜索 API 获取指定股票的相关新闻。
 
     Args:
-        symbol: 股票代码或加密货币符号
+        symbol: 股票代码
         limit: 返回的新闻数量
 
     Returns:

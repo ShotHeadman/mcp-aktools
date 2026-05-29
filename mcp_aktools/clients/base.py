@@ -22,7 +22,6 @@ class BaseAPIClient(ABC):
     - 配置化的 HTTP 会话管理
     - 自动速率限制
     - 自动重试机制（使用 urllib3 的重试策略）
-    - 代理支持（包括 NO_PROXY）
     - 请求日志记录
 
     子类应该继承此类并实现特定 API 的方法。
@@ -64,7 +63,6 @@ class BaseAPIClient(ABC):
         """创建配置好的 requests Session。
 
         配置包括：
-        - 代理设置（从配置中读取）
         - 重试策略（自动重试瞬时故障）
         - 默认请求头
 
@@ -76,15 +74,6 @@ class BaseAPIClient(ABC):
         # 设置默认请求头
         if self.default_headers:
             session.headers.update(self.default_headers)
-
-        # 配置代理（如果提供了 settings）
-        if self.settings:
-            proxies = self.settings.get_proxies()
-            if proxies:
-                session.proxies.update(proxies)
-                logger.debug(
-                    f"Configured proxies for {self.__class__.__name__}: {proxies}"
-                )
 
         # 配置重试策略
         # 使用 urllib3 的重试机制处理瞬时网络故障
@@ -102,19 +91,6 @@ class BaseAPIClient(ABC):
 
         return session
 
-    def _should_bypass_proxy(self, url: str) -> bool:
-        """检查给定的 URL 是否应该绕过代理。
-
-        Args:
-            url: 要检查的 URL
-
-        Returns:
-            如果应该绕过代理返回 True，否则返回 False
-        """
-        if self.settings:
-            return self.settings.should_bypass_proxy(url)
-        return False
-
     def _make_request(
         self, method: str, endpoint: str, **kwargs: Any
     ) -> requests.Response:
@@ -123,7 +99,6 @@ class BaseAPIClient(ABC):
         此方法处理：
         - 速率限制（如果配置了速率限制器）
         - URL 构建
-        - 代理绕过（基于 NO_PROXY 配置）
         - 请求日志记录
         - 错误处理和异常转换
 
@@ -156,11 +131,6 @@ class BaseAPIClient(ABC):
 
         # 设置默认超时
         kwargs.setdefault("timeout", self.timeout)
-
-        # 检查是否应该绕过代理
-        if self._should_bypass_proxy(url):
-            kwargs["proxies"] = {}  # 空字典表示不使用代理
-            logger.debug(f"Bypassing proxy for URL: {url}")
 
         # 记录请求详情（DEBUG 级别）
         logger.debug(

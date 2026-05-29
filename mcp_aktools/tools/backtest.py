@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = "data/backtest.db"
 
 
+def _yes_no(value: bool) -> str:
+    """Return an ASCII-safe boolean label for CLI and MCP clients."""
+    return "是" if value else "否"
+
+
 def _get_storage() -> SQLiteStorage:
     """获取 SQLite 存储实例。"""
     return SQLiteStorage(DEFAULT_DB_PATH)
@@ -287,10 +292,10 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         )
         
         signals.append("## MACD 信号")
-        signals.append(f"- 金叉: {'✅ 是' if macd_golden else '❌ 否'}")
-        signals.append(f"- 死叉: {'✅ 是' if macd_death else '❌ 否'}")
-        signals.append(f"- 强金叉: {'✅ 是' if macd_golden_strong else '❌ 否'}")
-        signals.append(f"- 强死叉: {'✅ 是' if macd_death_strong else '❌ 否'}")
+        signals.append(f"- 金叉: {_yes_no(macd_golden)}")
+        signals.append(f"- 死叉: {_yes_no(macd_death)}")
+        signals.append(f"- 强金叉: {_yes_no(macd_golden_strong)}")
+        signals.append(f"- 强死叉: {_yes_no(macd_death_strong)}")
         
         # 获取 MACD 指标值
         dif_col, dea_col = signal_calc._get_macd_columns()
@@ -305,8 +310,8 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         kdj_death = signal_calc.kdj_death_cross(last_index)
         
         signals.append("\n## KDJ 信号")
-        signals.append(f"- 金叉: {'✅ 是' if kdj_golden else '❌ 否'}")
-        signals.append(f"- 死叉: {'✅ 是' if kdj_death else '❌ 否'}")
+        signals.append(f"- 金叉: {_yes_no(kdj_golden)}")
+        signals.append(f"- 死叉: {_yes_no(kdj_death)}")
         
         # 获取 KDJ 指标值
         k_col, d_col = signal_calc._get_kdj_columns()
@@ -324,8 +329,8 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         rsi_oversold = signal_calc.rsi_oversold(last_index)
         
         signals.append("\n## RSI 信号")
-        signals.append(f"- 超买 (>70): {'✅ 是' if rsi_overbought else '❌ 否'}")
-        signals.append(f"- 超卖 (<30): {'✅ 是' if rsi_oversold else '❌ 否'}")
+        signals.append(f"- 超买 (>70): {_yes_no(rsi_overbought)}")
+        signals.append(f"- 超卖 (<30): {_yes_no(rsi_oversold)}")
         
         # 获取 RSI 指标值
         rsi_col = signal_calc._get_rsi_column()
@@ -338,8 +343,8 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         boll_lower = signal_calc.boll_lower_break(last_index)
         
         signals.append("\n## BOLL 信号")
-        signals.append(f"- 上轨突破: {'✅ 是' if boll_upper else '❌ 否'}")
-        signals.append(f"- 下轨突破: {'✅ 是' if boll_lower else '❌ 否'}")
+        signals.append(f"- 上轨突破: {_yes_no(boll_upper)}")
+        signals.append(f"- 下轨突破: {_yes_no(boll_lower)}")
         
         # 获取 BOLL 指标值
         bbl_col, bbu_col = signal_calc._get_boll_columns()

@@ -1,7 +1,7 @@
 [project]
 name = "mcp-aktools"
 version = "0.1.14"
-description = "MCP Server for stock and crypto"
+description = "MCP Server for stock market data"
 readme = "README.md"
 requires-python = ">=3.12"
 keywords = ["aktools", "akshare", "stock", "trading", "mcp", "llm"]

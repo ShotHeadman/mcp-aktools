@@ -13,7 +13,7 @@ from ..exceptions import ValidationException
 class Validators:
     """参数验证方法集合。
 
-    此类提供用于验证股票和加密货币数据查询中使用的各种参数类型的静态方法。
+    此类提供用于验证股票数据查询中使用的各种参数类型的静态方法。
     """
 
     # 有效的市场类型
@@ -21,26 +21,6 @@ class Validators:
 
     # 股票数据的有效周期类型（daily/weekly/monthly）
     VALID_PERIODS: List[str] = ["daily", "weekly", "monthly"]
-
-    # 加密货币数据的有效K线/蜡烛图间隔
-    VALID_CRYPTO_BARS: List[str] = [
-        "1m",
-        "3m",
-        "5m",
-        "15m",
-        "30m",
-        "1H",
-        "2H",
-        "4H",
-        "6H",
-        "12H",
-        "1D",
-        "2D",
-        "3D",
-        "1W",
-        "1M",
-        "3M",
-    ]
 
     # 日期格式模式 (YYYYMMDD)
     DATE_PATTERN = re.compile(r"^\d{8}$")
@@ -97,32 +77,6 @@ class Validators:
             )
         return period
 
-    @staticmethod
-    def validate_crypto_bar(bar: str) -> str:
-        """验证加密货币K线/蜡烛图间隔参数。
-
-        Args:
-            bar: 要验证的K线间隔
-
-        Returns:
-            验证后的K线间隔字符串
-
-        Raises:
-            ValidationException: 如果K线间隔不在 VALID_CRYPTO_BARS 中
-
-        Examples:
-            >>> Validators.validate_crypto_bar("1H")
-            '1H'
-            >>> Validators.validate_crypto_bar("5s")
-            ValidationException: Validation error for 'bar': ...
-        """
-        if bar not in Validators.VALID_CRYPTO_BARS:
-            raise ValidationException(
-                "bar", f"必须是 {Validators.VALID_CRYPTO_BARS} 中的一个，得到 '{bar}'"
-            )
-        return bar
-
-    @staticmethod
     def validate_limit(limit: int, min_val: int = 1, max_val: int = 300) -> int:
         """验证结果数量限制参数。
 
@@ -174,7 +128,7 @@ class Validators:
 
     @staticmethod
     def validate_symbol(symbol: str) -> str:
-        """验证股票/加密货币符号参数。
+        """验证股票符号参数。
 
         Args:
             symbol: 要验证的符号字符串

@@ -1,13 +1,13 @@
 """MCP AkTools - 基于 akshare 的 Model Context Protocol 服务器。
 
-此包提供股票和加密货币的数据查询与分析功能。
+此包提供股票数据查询与分析功能。
 
 主要模块：
 - server: MCP 服务器创建和运行
 - config: 配置管理
 - exceptions: 自定义异常类
-- tools: 工具函数（stock, crypto, market, news）
-- clients: API 客户端（akshare, okx, binance）
+- tools: 工具函数（stock, market, news）
+- clients: API 客户端（akshare）
 - utils: 工具函数（validators, rate_limiter, retry, indicators）
 - cache: 缓存管理
 """
