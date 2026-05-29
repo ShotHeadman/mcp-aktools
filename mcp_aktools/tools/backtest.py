@@ -16,10 +16,12 @@ from ..backtest.engine import BacktestEngine
 from ..backtest.formatter import BacktestFormatter
 from ..backtest.results import BacktestResult
 from ..backtest.strategy import Strategy
+from ..config import get_settings
 from ..exceptions import BacktestError, ConfigurationError, StorageError
 from ..models.indicator import CustomIndicator
 from ..models.trade import OrderType, PriceType
 from ..storage.sqlite import SQLiteStorage
+from ..utils.user_code import SAFE_BUILTINS, validate_user_code
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,24 @@ def _get_storage() -> SQLiteStorage:
 
 def _parse_strategy_code(strategy_code: str) -> type:
     """解析策略代码字符串，返回策略类。"""
-    exec_globals = {"Strategy": Strategy, "PriceType": PriceType, "OrderType": OrderType}
+    settings = get_settings()
+    if not settings.enable_user_code_execution:
+        raise BacktestError(
+            "strategy_parsing",
+            "用户代码执行默认关闭，请设置 ENABLE_USER_CODE_EXECUTION=true 后再运行回测策略代码",
+        )
+    validate_user_code(
+        strategy_code,
+        allowed_imports=settings.user_code_allowed_imports.split(","),
+        max_chars=settings.user_code_max_chars,
+    )
+    exec_globals = {
+        "__builtins__": SAFE_BUILTINS,
+        "__name__": "__mcp_user_strategy__",
+        "Strategy": Strategy,
+        "PriceType": PriceType,
+        "OrderType": OrderType,
+    }
     exec_locals = {}
     try:
         exec(strategy_code, exec_globals, exec_locals)
@@ -166,11 +185,19 @@ def register_indicator(name: str, description: str, function_code: str) -> str:
     import pandas as pd
     try:
         logger.info(f"注册自定义指标: name={name}")
+        settings = get_settings()
+        if not settings.enable_user_code_execution:
+            return "错误: 用户代码执行默认关闭，请设置 ENABLE_USER_CODE_EXECUTION=true 后再注册自定义指标"
         if not name or not name.strip():
             return "错误: 指标名称不能为空"
         name = name.strip()
         if not function_code or not function_code.strip():
             return "错误: 函数代码不能为空"
+        validate_user_code(
+            function_code,
+            allowed_imports=settings.user_code_allowed_imports.split(","),
+            max_chars=settings.user_code_max_chars,
+        )
         indicator = CustomIndicator(name=name, description=description or "", function_code=function_code)
         test_df = pd.DataFrame({
             "open": [1.0, 2.0, 3.0], "high": [1.5, 2.5, 3.5],

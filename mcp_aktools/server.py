@@ -83,10 +83,12 @@ def register_tools(mcp: FastMCP) -> None:
         limit: int = Field(30, description="返回数量(int)", strict=False),
         ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
         include_trend: bool = Field(False, description="是否包含趋势指标(BBI/TREND/LINREG/SLOPE)"),
+        response_format: str = Field("json", description="返回格式: json 或 csv"),
     ):
         return stock_tools.stock_prices(
             symbol=symbol, market=market, period=period, limit=limit,
-            ma_periods=ma_periods, include_trend=include_trend
+            ma_periods=ma_periods, include_trend=include_trend,
+            response_format=response_format,
         )
 
     @mcp.tool(
@@ -166,8 +168,14 @@ def register_tools(mcp: FastMCP) -> None:
         limit: int = Field(
             100, description="返回数量(int)，最大300，最小建议30", strict=False
         ),
+        response_format: str = Field("json", description="返回格式: json 或 csv"),
     ):
-        return crypto_tools.okx_prices(inst_id=instId, bar=bar, limit=limit)
+        return crypto_tools.okx_prices(
+            inst_id=instId,
+            bar=bar,
+            limit=limit,
+            response_format=response_format,
+        )
 
     @mcp.tool(
         title="获取加密货币杠杆多空比",

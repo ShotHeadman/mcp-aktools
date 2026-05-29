@@ -81,6 +81,14 @@ docker-compose up -d
 
 ## 🛠️ 可用工具
 
+### 高级配置
+
+- `CACHE_DISK_TTL`: 非价格类 SQLite 磁盘缓存过期时间，单位秒；历史价格类缓存仍按持久缓存处理。
+- `ENABLE_USER_CODE_EXECUTION`: 是否允许执行回测策略和自定义指标代码，默认 `false`。
+- `USER_CODE_MAX_CHARS`: 用户代码最大长度，默认 `20000`。
+- `USER_CODE_ALLOWED_IMPORTS`: 允许用户代码导入的模块列表，逗号分隔，默认不允许导入。
+- `stock_prices` 和 `okx_prices` 默认返回结构化 JSON；如需旧 CSV 文本可传 `response_format=csv`。
+
 <details>
 <summary><strong>个股相关</strong></summary>
 

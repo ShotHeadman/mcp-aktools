@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # 交易规则配置
     trading_rule_file: Optional[str] = None
 
+    # 用户代码执行配置（回测策略、自定义指标）
+    enable_user_code_execution: bool = False
+    user_code_max_chars: int = 20000
+    user_code_allowed_imports: str = ""
+
     @field_validator("database_url", mode="before")
     @classmethod
     def set_default_database_url(cls, v: Optional[str]) -> Optional[str]:

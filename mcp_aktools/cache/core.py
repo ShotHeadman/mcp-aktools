@@ -77,7 +77,11 @@ class CacheKey:
         return CacheKey.ALL.setdefault(key, cache)
 
     @classmethod
-    def init_sqlite_backend(cls, db_path: Optional[str] = None) -> None:
+    def init_sqlite_backend(
+        cls,
+        db_path: Optional[str] = None,
+        disk_ttl: Optional[int] = None,
+    ) -> None:
         """初始化 SQLite 后端单例。
         
         此方法应在应用程序启动时调用一次，以初始化 SQLite 缓存后端。
@@ -85,13 +89,14 @@ class CacheKey:
         
         参数:
             db_path: SQLite 数据库文件路径。如果为 None，则使用默认路径。
+            disk_ttl: 磁盘缓存 TTL，单位为秒。None 或非正数表示不过期。
         """
         if cls._sqlite_initialized:
             logger.debug("SQLite 后端已初始化")
             return
         
         try:
-            cls._sqlite_backend = SQLiteCacheBackend(db_path)
+            cls._sqlite_backend = SQLiteCacheBackend(db_path, disk_ttl=disk_ttl)
             cls._dividend_checker = DividendChecker(cls._sqlite_backend)
             cls._sqlite_initialized = True
             
@@ -155,6 +160,8 @@ class CacheKey:
         if len(parts) >= 1:
             first_part = parts[0].lower()
             if 'price' in first_part:
+                return 'price'
+            elif 'hist' in first_part or 'daily' in first_part or 'candle' in first_part:
                 return 'price'
             elif 'dividend' in first_part:
                 return 'dividend'

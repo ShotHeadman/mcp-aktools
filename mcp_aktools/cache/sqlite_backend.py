@@ -7,7 +7,7 @@
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -28,13 +28,14 @@ class SQLiteCacheBackend:
         _local: 用于数据库连接的线程本地存储。
     """
     
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, disk_ttl: Optional[int] = None):
         """初始化 SQLite 缓存后端。
         
         参数:
             db_path: 数据库文件路径。如果为 None，则使用用户缓存目录中的默认路径。
         """
         self.db_path = db_path or self._get_default_db_path()
+        self.disk_ttl = disk_ttl
         self._lock = threading.Lock()
         self._local = threading.local()
         
@@ -78,6 +79,27 @@ class SQLiteCacheBackend:
             self._local.connection.execute("PRAGMA journal_mode=WAL")
             self._local.connection.execute("PRAGMA synchronous=NORMAL")
         return self._local.connection
+
+    def _is_expired(
+        self,
+        updated_at: Optional[str],
+        data_type: Optional[str],
+    ) -> bool:
+        """判断缓存条目是否超过磁盘 TTL。"""
+        if not self.disk_ttl or self.disk_ttl <= 0:
+            return False
+        if data_type == "price":
+            return False
+        if not updated_at:
+            return False
+
+        try:
+            updated = datetime.fromisoformat(updated_at)
+        except (TypeError, ValueError):
+            logger.warning("无法解析缓存更新时间: %s", updated_at)
+            return False
+
+        return datetime.now() - updated > timedelta(seconds=self.disk_ttl)
     
     def _create_tables(self) -> None:
         """如果数据表不存在则创建。"""
@@ -165,15 +187,25 @@ class SQLiteCacheBackend:
             try:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT data FROM cache_entries WHERE cache_key = ?",
+                    "SELECT data, updated_at, data_type FROM cache_entries WHERE cache_key = ?",
                     (key,)
                 )
                 row = cursor.fetchone()
 
                 if row:
+                    data, updated_at, data_type = row
+                    if self._is_expired(updated_at, data_type):
+                        logger.debug("SQLite 缓存已过期: %s", key)
+                        cursor.execute(
+                            "DELETE FROM cache_entries WHERE cache_key = ?",
+                            (key,)
+                        )
+                        conn.commit()
+                        self._record_miss()
+                        return None
                     logger.debug("SQLite 缓存命中: %s", key)
                     self._record_hit()
-                    return row[0]
+                    return data
                 logger.debug("SQLite 缓存未命中: %s", key)
                 self._record_miss()
                 return None
@@ -202,13 +234,22 @@ class SQLiteCacheBackend:
             try:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT data, start_date, end_date FROM cache_entries WHERE cache_key = ?",
+                    "SELECT data, start_date, end_date, updated_at, data_type FROM cache_entries WHERE cache_key = ?",
                     (key,)
                 )
                 row = cursor.fetchone()
 
                 if row:
-                    data, start_date_str, end_date_str = row
+                    data, start_date_str, end_date_str, updated_at, data_type = row
+                    if self._is_expired(updated_at, data_type):
+                        logger.debug("SQLite 缓存已过期（含范围）: %s", key)
+                        cursor.execute(
+                            "DELETE FROM cache_entries WHERE cache_key = ?",
+                            (key,)
+                        )
+                        conn.commit()
+                        self._record_miss()
+                        return None
 
                     # 将 ISO 格式字符串转换回 datetime 对象
                     start_date = None

@@ -59,7 +59,7 @@ class AkShareClient:
         """
         try:
             db_path = self.settings.get_database_path()
-            CacheKey.init_sqlite_backend(db_path)
+            CacheKey.init_sqlite_backend(db_path, disk_ttl=self.settings.cache_disk_ttl)
             logger.debug(f"SQLite cache backend initialized with path: {db_path}")
         except Exception as e:
             logger.warning(f"Failed to initialize SQLite cache backend: {e}. Falling back to memory-only cache.")
@@ -171,7 +171,7 @@ class AkShareClient:
                                     serialized,
                                     start_date=start_date,
                                     end_date=end_date,
-                                    data_type='dataframe',
+                                    data_type=self._infer_data_type(func.__name__),
                                     symbol=kwargs.get('symbol')
                                 )
                                 logger.debug(
@@ -248,7 +248,7 @@ class AkShareClient:
                                 serialized,
                                 start_date=start_date,
                                 end_date=end_date,
-                                data_type='dataframe',
+                                data_type=self._infer_data_type(func.__name__),
                                 symbol=kwargs.get('symbol')
                             )
                             # 需求 6.1: 记录缓存更新日志
@@ -481,6 +481,17 @@ class AkShareClient:
 
         cache_key = "-".join(key_parts)
         return cache_key
+
+    def _infer_data_type(self, func_name: str) -> str:
+        """根据 AkShare 函数名推断缓存数据类型。"""
+        normalized = func_name.lower()
+        if any(token in normalized for token in ("hist", "daily", "price", "candle")):
+            return "price"
+        if "dividend" in normalized:
+            return "dividend"
+        if "info" in normalized or "profile" in normalized:
+            return "info"
+        return "dataframe"
 
     # 便捷方法：常用的 AkShare 函数封装
 

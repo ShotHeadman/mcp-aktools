@@ -9,6 +9,8 @@ import json
 
 import pandas as pd
 
+from ..utils.user_code import SAFE_BUILTINS
+
 
 @dataclass
 class CustomIndicator:
@@ -44,7 +46,7 @@ class CustomIndicator:
         
         try:
             # 执行用户代码
-            exec(self.function_code, {"pd": pd}, local_vars)
+            exec(self.function_code, {"__builtins__": SAFE_BUILTINS, "pd": pd}, local_vars)
             result = local_vars.get("result")
             
             if result is None:

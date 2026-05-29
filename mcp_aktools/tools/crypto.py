@@ -12,13 +12,14 @@
 import json
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
 from ..clients.binance import BinanceClient
 from ..clients.okx import OKXClient
 from ..exceptions import APIException, DataParsingException
+from ..utils.formatting import dataframe_records, validate_response_format
 from ..utils.indicators import add_technical_indicators
 from ..utils.validators import Validators
 
@@ -53,7 +54,12 @@ def _get_binance_client() -> BinanceClient:
     return _binance_client
 
 
-def okx_prices(inst_id: str, bar: str = "1H", limit: int = 100) -> str:
+def okx_prices(
+    inst_id: str,
+    bar: str = "1H",
+    limit: int = 100,
+    response_format: str = "json",
+) -> Any:
     """获取 OKX 加密货币历史价格和技术指标。
 
     从 OKX 获取加密货币的 K 线数据，包括价格、交易量和技术指标（MACD、KDJ、RSI、BOLL）。
@@ -84,6 +90,7 @@ def okx_prices(inst_id: str, bar: str = "1H", limit: int = 100) -> str:
         Validators.validate_symbol(inst_id)
         Validators.validate_crypto_bar(bar)
         Validators.validate_limit(limit, min_val=1, max_val=300)
+        response_format = validate_response_format(response_format, default="json")
 
         # 获取客户端
         client = _get_okx_client()
@@ -121,15 +128,18 @@ def okx_prices(inst_id: str, bar: str = "1H", limit: int = 100) -> str:
             "BOLL.L",
         ]
 
-        # 转换为 CSV 格式
-        all_rows = (
-            df.to_csv(columns=columns, index=False, float_format="%.2f")
-            .strip()
-            .split("\n")
-        )
-
-        # 返回表头和最后 limit 行数据
-        result = "\n".join([all_rows[0], *all_rows[-limit:]])
+        result_df = df[columns].tail(int(limit))
+        if response_format == "json":
+            result = {
+                "inst_id": inst_id,
+                "bar": bar,
+                "limit": limit,
+                "columns": columns,
+                "row_count": len(result_df),
+                "rows": dataframe_records(result_df),
+            }
+        else:
+            result = result_df.to_csv(index=False, float_format="%.2f").strip()
 
         logger.info(f"Successfully fetched {limit} price records for {inst_id}")
         return result
