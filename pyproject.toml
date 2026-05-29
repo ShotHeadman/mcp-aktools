@@ -1,19 +1,33 @@
 [project]
 name = "mcp-aktools"
-version = "0.1.13"
+version = "0.1.14"
 description = "MCP Server for stock and crypto"
 readme = "README.md"
 requires-python = ">=3.12"
 keywords = ["aktools", "akshare", "stock", "trading", "mcp", "llm"]
 license = { text = "MIT" }
 dependencies = [
-    "akshare>=1.17.0",
+    "akshare>=1.18.63",
     "cachetools>=6.2.0",
-    "diskcache>=5.6.0",
-    "fastmcp>=2.0.0",
+    "fastmcp>=3.3.1",
     "pydantic-settings>=2.0.0",
     "pandas-ta>=0.4.0",
+    "pyarrow>=14.0.0",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "hypothesis>=6.100.0",
+    "pytest-cov>=4.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
 
 [project.urls]
 Homepage = "https://github.com/shotheadman/mcp-aktools"
@@ -25,6 +39,13 @@ mcp-aktools = "mcp_aktools:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pylint.messages_control]
+disable = [
+    "logging-fstring-interpolation",
+    "logging-format-interpolation",
+    "logging-format-truncated",
+]
 
 [[tool.uv.index]]
 url="https://pypi.tuna.tsinghua.edu.cn/simple"

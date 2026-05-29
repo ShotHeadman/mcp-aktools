@@ -6,8 +6,6 @@ from typing import Optional
 class MCPAkToolsException(Exception):
     """所有 MCP AkTools 异常的基类。"""
 
-    pass
-
 
 class APIException(MCPAkToolsException):
     """外部 API 调用失败时抛出的异常。
@@ -143,3 +141,85 @@ class CacheException(MCPAkToolsException):
         self.operation = operation
         self.message = message
         super().__init__(f"缓存 {operation} 失败: {message}")
+
+
+# ============================================================================
+# 回测系统异常类
+# ============================================================================
+
+
+class ConfigurationError(MCPAkToolsException):
+    """配置参数无效时抛出的异常。
+
+    当回测配置参数验证失败时抛出此异常，例如：
+    - 无效的股票代码格式
+    - 无效的日期格式
+    - 无效的K线周期
+    - 滑点参数不合理
+    - 风险管理参数为负数
+
+    Attributes:
+        param_name: 验证失败的参数名称
+        message: 描述验证失败的错误消息
+    """
+
+    def __init__(self, param_name: str, message: str):
+        """初始化 ConfigurationError。
+
+        Args:
+            param_name: 验证失败的参数名称
+            message: 描述验证失败的错误消息
+        """
+        self.param_name = param_name
+        self.message = message
+        super().__init__(f"配置参数 '{param_name}' 无效: {message}")
+
+
+class StorageError(MCPAkToolsException):
+    """数据库操作失败时抛出的异常。
+
+    当 SQLite 存储操作失败时抛出此异常，例如：
+    - 数据库连接失败
+    - 表创建失败
+    - 数据插入/查询失败
+
+    Attributes:
+        operation: 失败的数据库操作
+        message: 描述失败的错误消息
+    """
+
+    def __init__(self, operation: str, message: str):
+        """初始化 StorageError。
+
+        Args:
+            operation: 失败的数据库操作
+            message: 描述失败的错误消息
+        """
+        self.operation = operation
+        self.message = message
+        super().__init__(f"存储操作 '{operation}' 失败: {message}")
+
+
+class BacktestError(MCPAkToolsException):
+    """回测执行失败时抛出的异常。
+
+    当回测过程中发生错误时抛出此异常，例如：
+    - 数据加载失败
+    - 策略执行异常
+    - 指标计算失败
+
+    Attributes:
+        stage: 失败发生的阶段
+        message: 描述失败的错误消息
+    """
+
+    def __init__(self, stage: str, message: str):
+        """初始化 BacktestError。
+
+        Args:
+            stage: 失败发生的阶段（如 "data_loading", "strategy_execution" 等）
+            message: 描述失败的错误消息
+        """
+        self.stage = stage
+        self.message = message
+        super().__init__(f"回测在 '{stage}' 阶段失败: {message}")

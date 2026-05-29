@@ -13,7 +13,6 @@ from .crypto import (
 from .market import (
     get_current_time,
     stock_lhb_ggtj_sina,
-    stock_sector_fund_flow_rank,
     stock_zt_pool_em,
     stock_zt_pool_strong_em,
 )
@@ -50,7 +49,6 @@ __all__ = [
     "stock_zt_pool_em",
     "stock_zt_pool_strong_em",
     "stock_lhb_ggtj_sina",
-    "stock_sector_fund_flow_rank",
     # 新闻工具
     "stock_news",
     "stock_news_global",

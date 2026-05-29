@@ -86,6 +86,42 @@ def get_current_time() -> str:
         return f"当前时间: {now.isoformat()}, 星期{week}"
 
 
+def _convert_index_symbol(symbol: str) -> str:
+    """将指数代码转换为新浪接口所需的格式（内部辅助函数）。
+
+    转换规则:
+    - 以 "399" 开头 → "sz" 前缀（深证指数）
+    - 以 "000" 开头且长度为6 → "sh" 前缀（上证指数）
+    - 其他 → "sh" 前缀
+
+    Args:
+        symbol: 原始指数代码，如 "000001", "399001", "000300"
+
+    Returns:
+        str: 转换后的指数代码，如 "sh000001", "sz399001", "sh000300"
+
+    Example:
+        >>> _convert_index_symbol("000001")
+        'sh000001'
+        >>> _convert_index_symbol("399001")
+        'sz399001'
+        >>> _convert_index_symbol("000300")
+        'sh000300'
+    """
+    symbol = symbol.strip()
+    
+    # 如果已经有前缀，直接返回
+    if symbol.startswith("sh") or symbol.startswith("sz"):
+        return symbol
+    
+    # 以 "399" 开头的是深证指数
+    if symbol.startswith("399"):
+        return f"sz{symbol}"
+    
+    # 其他情况（包括 "000" 开头的上证指数）使用 "sh" 前缀
+    return f"sh{symbol}"
+
+
 def _recent_trade_date() -> datetime.date:
     """获取最近的交易日（内部辅助函数）。
 
@@ -329,96 +365,15 @@ def stock_lhb_ggtj_sina(
         return f"获取失败: {str(e)}"
 
 
-def stock_sector_fund_flow_rank(
-    days: str = Field(
-        "今日",
-        description="天数，仅支持: {'今日','5日','10日'}，如果需要获取今日数据，请确保是交易日",
-    ),
-    cate: str = Field(
-        "行业资金流", description="仅支持: {'行业资金流','概念资金流','地域资金流'}"
-    ),
-) -> str:
-    """获取中国A股市场(上证、深证)的行业资金流向数据。
-
-    显示各行业/概念/地域的资金流入流出情况。
-
-    Args:
-        days: 天数，仅支持: 今日/5日/10日
-              注意：如果需要获取今日数据，请确保是交易日
-        cate: 分类，仅支持: 行业资金流/概念资金流/地域资金流
-
-    Returns:
-        str: CSV 格式的资金流向数据（包含涨幅最高和最低的各20个）
-
-    Raises:
-        ValidationException: 当参数验证失败时
-
-    Example:
-        >>> result = stock_sector_fund_flow_rank("今日", "行业资金流")
-        >>> print(result)
-        序号,名称,今日涨跌幅,今日主力净流入,今日超大单净流入,...
-    """
-    logger.info(f"获取板块资金流: days={days}, cate={cate}")
-
-    try:
-        # 验证参数
-        valid_days = ["今日", "5日", "10日"]
-        valid_cate = ["行业资金流", "概念资金流", "地域资金流"]
-
-        if days not in valid_days:
-            raise ValidationException(
-                "days", f"必须是 {valid_days} 之一，得到 '{days}'"
-            )
-
-        if cate not in valid_cate:
-            raise ValidationException(
-                "cate", f"必须是 {valid_cate} 之一，得到 '{cate}'"
-            )
-
-        # 获取资金流数据
-        client = _get_akshare_client()
-        dfs = client.call(
-            ak.stock_sector_fund_flow_rank, indicator=days, sector_type=cate, ttl=1200
-        )
-
-        if dfs is None or dfs.empty:
-            logger.warning(f"未找到资金流数据: days={days}, cate={cate}")
-            return "获取数据失败"
-
-        # 按今日涨跌幅排序
-        try:
-            dfs.sort_values("今日涨跌幅", ascending=False, inplace=True)
-            dfs.drop(columns=["序号"], inplace=True, errors="ignore")
-        except Exception as e:
-            logger.debug(f"排序或删除列时出错（可忽略）: {e}")
-
-        # 返回涨幅最高和最低的各20个
-        try:
-            result_df = pd.concat([dfs.head(20), dfs.tail(20)])
-            result = result_df.to_csv(index=False, float_format="%.2f").strip()
-
-            logger.info(f"成功获取 {len(result_df)} 条资金流数据")
-            return result
-
-        except Exception as exc:
-            logger.error(f"处理资金流数据失败: {exc}", exc_info=True)
-            return str(exc)
-
-    except ValidationException as e:
-        logger.error(f"参数验证失败: {e}")
-        return f"参数错误: {e.message}"
-    except Exception as e:
-        logger.error(f"获取资金流数据失败: {e}", exc_info=True)
-        return f"获取失败: {str(e)}"
-
-
 def stock_zh_a_spot_em(
     limit: int = Field(50, description="返回数量(int,30-100)", strict=False),
 ) -> str:
     """获取 A 股实时行情数据。
 
-    从东方财富获取全市场 A 股实时行情数据，包括股票代码、名称、
+    从新浪财经获取全市场 A 股实时行情数据，包括股票代码、名称、
     最新价、涨跌幅、成交量、成交额等信息。
+
+    注意：此函数使用新浪数据源 (ak.stock_zh_a_spot) 替代被拦截的东方财富接口。
 
     Args:
         limit: 返回数量，范围 30-100
@@ -441,20 +396,22 @@ def stock_zh_a_spot_em(
         # 验证参数
         Validators.validate_limit(limit, min_val=30, max_val=100)
 
-        # 获取实时行情数据，使用 60 秒 TTL 缓存
+        # 获取实时行情数据，使用新浪接口替代被拦截的东财接口
+        # 使用 60 秒 TTL 缓存
         client = _get_akshare_client()
-        dfs = client.call(ak.stock_zh_a_spot_em, ttl=60)
+        dfs = client.call(ak.stock_zh_a_spot, ttl=60)
 
         if dfs is None or dfs.empty:
             logger.warning("未获取到A股实时行情数据")
             return "获取实时行情数据失败"
 
-        # 选择关键列（根据东财接口返回的列名）
-        # 东财接口返回列: 序号, 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅, 最高, 最低, 今开, 昨收, 量比, 换手率, 市盈率-动态, 市净率, 总市值, 流通市值, 涨速, 5分钟涨跌, 60日涨跌幅, 年初至今涨跌幅
-        columns = ['代码', '名称', '最新价', '涨跌幅', '涨跌额', '成交量', '成交额', '振幅', '最高', '最低', '今开', '昨收', '换手率']
+        # 新浪接口返回列: 代码, 名称, 最新价, 涨跌额, 涨跌幅, 买入, 卖出, 昨收, 今开, 最高, 最低, 成交量, 成交额
+        # 目标列: 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 最高, 最低, 今开, 昨收
+        # 注意：新浪接口不提供 振幅 和 换手率 列
+        target_columns = ['代码', '名称', '最新价', '涨跌幅', '涨跌额', '成交量', '成交额', '最高', '最低', '今开', '昨收']
         
         # 只选择存在的列
-        available_columns = [col for col in columns if col in dfs.columns]
+        available_columns = [col for col in target_columns if col in dfs.columns]
         if not available_columns:
             logger.error(f"实时行情数据列名不匹配，实际列名: {list(dfs.columns)}")
             return "数据格式异常，列名不匹配"
@@ -472,6 +429,292 @@ def stock_zh_a_spot_em(
         return f"参数错误: {e.message}"
     except Exception as e:
         logger.error(f"获取A股实时行情失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"
+
+
+def margin_trading(
+    limit: int = Field(30, description="返回数量(int)，默认30条", strict=False),
+) -> str:
+    """获取中国A股市场融资融券数据（综合上海和深圳两市）。
+
+    从东方财富获取上海和深圳两市的融资融券历史数据，包括融资买入额、
+    融资余额、融券余量、融券余额、融资融券余额等信息。
+
+    AkShare 接口:
+    - ak.macro_china_market_margin_sh() - 上海市场融资融券数据
+    - ak.macro_china_market_margin_sz() - 深圳市场融资融券数据
+
+    Args:
+        limit: 返回记录数量，默认30条
+
+    Returns:
+        str: CSV 格式的融资融券数据，包含两市综合数据
+
+    Example:
+        >>> result = margin_trading(30)
+        >>> print(result)
+        日期,上海融资余额,上海融券余额,上海融资融券余额,深圳融资余额,深圳融券余额,深圳融资融券余额,两市融资融券余额
+    """
+    logger.info(f"获取融资融券数据: limit={limit}")
+
+    try:
+        client = _get_akshare_client()
+
+        # 获取上海市场融资融券数据
+        sh_df = client.call(ak.macro_china_market_margin_sh, ttl=3600)
+        # 获取深圳市场融资融券数据
+        sz_df = client.call(ak.macro_china_market_margin_sz, ttl=3600)
+
+        if (sh_df is None or sh_df.empty) and (sz_df is None or sz_df.empty):
+            logger.warning("未获取到融资融券数据")
+            return "Not Found: 未获取到融资融券数据"
+
+        # 处理上海数据
+        if sh_df is not None and not sh_df.empty:
+            sh_df = sh_df.rename(columns={
+                "融资买入额": "上海融资买入额",
+                "融资余额": "上海融资余额",
+                "融券余量": "上海融券余量",
+                "融券余额": "上海融券余额",
+                "融券卖出量": "上海融券卖出量",
+                "融资融券余额": "上海融资融券余额"
+            })
+            sh_df["日期"] = pd.to_datetime(sh_df["日期"]).dt.strftime("%Y-%m-%d")
+            sh_df = sh_df.sort_values("日期", ascending=False)
+
+        # 处理深圳数据
+        if sz_df is not None and not sz_df.empty:
+            sz_df = sz_df.rename(columns={
+                "融资买入额": "深圳融资买入额",
+                "融资余额": "深圳融资余额",
+                "融券余量": "深圳融券余量",
+                "融券余额": "深圳融券余额",
+                "融券卖出量": "深圳融券卖出量",
+                "融资融券余额": "深圳融资融券余额"
+            })
+            sz_df["日期"] = pd.to_datetime(sz_df["日期"]).dt.strftime("%Y-%m-%d")
+            sz_df = sz_df.sort_values("日期", ascending=False)
+
+        # 合并两市数据
+        if sh_df is not None and not sh_df.empty and sz_df is not None and not sz_df.empty:
+            # 按日期合并
+            merged_df = pd.merge(sh_df, sz_df, on="日期", how="outer")
+            merged_df = merged_df.sort_values("日期", ascending=False)
+            
+            # 计算两市合计
+            merged_df["两市融资融券余额"] = (
+                merged_df["上海融资融券余额"].fillna(0) + 
+                merged_df["深圳融资融券余额"].fillna(0)
+            )
+            
+            # 选择关键列
+            columns = [
+                "日期",
+                "上海融资余额", "上海融券余额", "上海融资融券余额",
+                "深圳融资余额", "深圳融券余额", "深圳融资融券余额",
+                "两市融资融券余额"
+            ]
+            available_columns = [col for col in columns if col in merged_df.columns]
+            result_df = merged_df[available_columns]
+        elif sh_df is not None and not sh_df.empty:
+            result_df = sh_df
+        else:
+            result_df = sz_df
+
+        # 限制返回数量
+        result_df = result_df.head(int(limit))
+
+        # 转换为 CSV 格式
+        result = result_df.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(result_df)} 条融资融券数据")
+        return result
+
+    except Exception as e:
+        logger.error(f"获取融资融券数据失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"
+
+
+def index_zh_a_hist(
+    symbol: str = Field(description="指数代码，如 000001(上证指数), 399001(深证成指), 000300(沪深300)"),
+    period: str = Field("daily", description="周期，仅支持: daily(日线)。注意：新浪接口不支持周线/月线"),
+    limit: int = Field(30, description="返回数量(int)", strict=False),
+) -> str:
+    """获取A股指数历史行情数据。
+
+    从新浪财经获取A股指数的历史行情数据，包括开盘价、收盘价、最高价、
+    最低价、成交量等信息，并计算技术指标。
+
+    注意：此函数使用新浪数据源 (ak.stock_zh_index_daily) 替代被拦截的东方财富接口。
+    新浪接口仅支持日线数据，不支持周线/月线。
+
+    AkShare 接口: ak.stock_zh_index_daily(symbol)
+
+    常用指数代码:
+    - 000001: 上证指数
+    - 399001: 深证成指
+    - 399006: 创业板指
+    - 000300: 沪深300
+    - 000016: 上证50
+    - 000905: 中证500
+
+    Args:
+        symbol: 指数代码（不需要市场标识）
+        period: 周期，仅支持 daily(日线)
+        limit: 返回记录数量，默认30条
+
+    Returns:
+        str: CSV 格式的指数历史行情数据，包含技术指标
+
+    Example:
+        >>> result = index_zh_a_hist("000001", "daily", 30)
+        >>> print(result)
+        日期,开盘,收盘,最高,最低,成交量,DIF,DEA,MACD,...
+    """
+    logger.info(f"获取指数历史行情: symbol={symbol}, period={period}, limit={limit}")
+
+    try:
+        # 验证周期参数 - 新浪接口仅支持日线
+        if period != "daily":
+            logger.warning(f"新浪指数接口不支持 {period}，仅支持 daily")
+            return f"参数错误: 新浪指数接口仅支持日线数据，不支持周线/月线。请使用 period='daily'"
+
+        # 转换指数代码格式
+        converted_symbol = _convert_index_symbol(symbol)
+        logger.debug(f"指数代码转换: {symbol} -> {converted_symbol}")
+
+        # 获取指数历史数据，使用新浪接口替代被拦截的东财接口
+        client = _get_akshare_client()
+        dfs = client.call(
+            ak.stock_zh_index_daily,
+            symbol=converted_symbol,
+            ttl=1200
+        )
+
+        if dfs is None or dfs.empty:
+            logger.warning(f"未找到指数历史数据: symbol={symbol} (converted: {converted_symbol})")
+            return f"Not Found for {symbol}"
+
+        # 新浪接口返回列: date, open, high, low, close, volume
+        # 目标列: 日期, 开盘, 最高, 最低, 收盘, 成交量
+        column_mapping = {
+            "date": "日期",
+            "open": "开盘",
+            "high": "最高",
+            "low": "最低",
+            "close": "收盘",
+            "volume": "成交量"
+        }
+        
+        # 重命名列
+        dfs = dfs.rename(columns=column_mapping)
+        
+        # 确保日期列是字符串格式
+        if "日期" in dfs.columns:
+            dfs["日期"] = pd.to_datetime(dfs["日期"]).dt.strftime("%Y-%m-%d")
+
+        # 按日期降序排序
+        dfs = dfs.sort_values("日期", ascending=False)
+
+        # 添加技术指标（需要先按日期升序排列计算，然后再降序）
+        dfs_for_calc = dfs.sort_values("日期", ascending=True).copy()
+        
+        # 导入技术指标计算函数
+        from ..utils.indicators import add_technical_indicators
+        
+        try:
+            add_technical_indicators(
+                dfs_for_calc,
+                close=dfs_for_calc["收盘"],
+                low=dfs_for_calc["最低"],
+                high=dfs_for_calc["最高"]
+            )
+            # 将计算好的指标合并回原 DataFrame
+            dfs = dfs_for_calc.sort_values("日期", ascending=False)
+        except Exception as e:
+            logger.warning(f"计算技术指标失败（可忽略）: {e}")
+
+        # 限制返回数量
+        dfs = dfs.head(int(limit))
+
+        # 转换为 CSV 格式
+        result = dfs.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(dfs)} 条指数历史数据")
+        return result
+
+    except ValidationException as e:
+        logger.error(f"参数验证失败: {e}")
+        return f"参数错误: {e.message}"
+    except Exception as e:
+        logger.error(f"获取指数历史行情失败: {e}", exc_info=True)
+        return f"获取失败: {str(e)}"
+
+
+def stock_individual_fund_flow(
+    symbol: str = Field(description="股票代码，如 600519, 000001"),
+    market: str = Field("sh", description="股票市场，仅支持: sh(上证), sz(深证)"),
+) -> str:
+    """获取个股资金流向历史详情数据。
+
+    从东方财富获取单个股票的历史资金流向数据，包括主力净流入、超大单净流入、
+    大单净流入、中单净流入、小单净流入等信息。
+
+    AkShare 接口: ak.stock_individual_fund_flow(stock, market)
+
+    Args:
+        symbol: 股票代码（如 600519, 000001）
+        market: 股票市场，"sh" 表示上证，"sz" 表示深证
+
+    Returns:
+        str: CSV 格式的个股资金流向历史数据
+
+    Example:
+        >>> result = stock_individual_fund_flow("600519", "sh")
+        >>> print(result)
+        日期,收盘价,涨跌幅,主力净流入-净额,主力净流入-净占比,...
+    """
+    logger.info(f"获取个股资金流向: symbol={symbol}, market={market}")
+
+    try:
+        # 验证市场参数
+        valid_markets = ["sh", "sz"]
+        if market not in valid_markets:
+            raise ValidationException(
+                "market", f"必须是 {valid_markets} 之一，得到 '{market}'"
+            )
+
+        # 验证股票代码
+        if not symbol or not symbol.strip():
+            raise ValidationException("symbol", "股票代码不能为空")
+
+        # 获取个股资金流向数据
+        client = _get_akshare_client()
+        dfs = client.call(
+            ak.stock_individual_fund_flow,
+            stock=symbol,
+            market=market,
+            ttl=1200
+        )
+
+        if dfs is None or dfs.empty:
+            logger.warning(f"未找到个股资金流向数据: symbol={symbol}, market={market}")
+            return f"Not Found for {symbol}"
+
+        # 按日期降序排序
+        dfs = dfs.sort_values("日期", ascending=False)
+
+        # 转换为 CSV 格式
+        result = dfs.to_csv(index=False, float_format="%.2f").strip()
+
+        logger.info(f"成功获取 {len(dfs)} 条个股资金流向数据")
+        return result
+
+    except ValidationException as e:
+        logger.error(f"参数验证失败: {e}")
+        return f"参数错误: {e.message}"
+    except Exception as e:
+        logger.error(f"获取个股资金流向失败: {e}", exc_info=True)
         return f"获取失败: {str(e)}"
 
 

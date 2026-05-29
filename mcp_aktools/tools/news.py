@@ -166,7 +166,7 @@ def _stock_news_em(symbol: str, limit: int = 20) -> Optional[pd.DataFrame]:
         # 尝试从缓存获取
         from ..cache import CacheKey
 
-        cache = CacheKey.init(cache_key, ttl=3600, ttl2=7200)  # 1小时内存，2小时磁盘
+        cache = CacheKey.init(cache_key, ttl=3600)
         cached_data = cache.get()
 
         if cached_data is not None:

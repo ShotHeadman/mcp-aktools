@@ -1,0 +1,5 @@
+[MESSAGES CONTROL]
+disable=logging-fstring-interpolation,
+        logging-format-interpolation,
+        logging-format-truncated,
+        import-error

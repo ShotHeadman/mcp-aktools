@@ -32,7 +32,6 @@
         "BINANCE_BASE_URL": "https://bian.4url.cn", # 币安地址，默认: https://www.binance.com
         "NEWSNOW_BASE_URL": "https://newsnow.busiyi.world", # Newsnow接口地址
         "NEWSNOW_CHANNELS": "wallstreetcn-quick,cls-telegraph,jin10", # Newsnow资讯来源
-        "TRADING_RULE_FILE": "/path/to/your/trading_rules.md", # 交易规则文件路径（可选）
       }
     }
   }
@@ -80,53 +79,15 @@ docker-compose up -d
 
 ------
 
-## � 交易规则配置
-
-MCP AkTools 支持自定义交易规则文件，在分析走势和买入卖出点时，AI 会以该规则文件为最高基准进行判断。
-
-### 配置方法
-
-在 MCP 配置中添加 `TRADING_RULE_FILE` 环境变量：
-
-```json
-{
-  "mcpServers": {
-    "mcp-aktools": {
-      "command": "uvx",
-      "args": ["mcp-aktools"],
-      "env": {
-        "TRADING_RULE_FILE": "/path/to/your/trading_rules.md"
-      }
-    }
-  }
-}
-```
-
-### 规则文件示例
-
-项目提供了 `trading_rules.example.md` 作为参考模板，包含：
-- 风险控制规则（仓位管理、止损止盈）
-- 买入规则（技术指标、基本面、市场环境）
-- 卖出规则（止损、止盈、技术信号）
-- 持仓规则（加仓、减仓条件）
-- 禁止交易条件
-- 特殊情况处理
-
-你可以根据自己的交易策略修改该文件。
-
-### 使用方式
-
-1. AI 在分析股票或加密货币时，会自动调用 `get_trading_rules` 工具获取你的交易规则
-2. 在给出投资建议时，会严格遵循你配置的规则进行判断
-3. 规则文件支持 Markdown 格式，便于阅读和维护
-
-📖 **详细文档**：
-- [交易规则配置指南](trading/trading_rules_guide.md)
-- [发布到公共平台指南](PUBLISHING.md)
-
-------
-
 ## 🛠️ 可用工具
+
+### 高级配置
+
+- `CACHE_DISK_TTL`: 非价格类 SQLite 磁盘缓存过期时间，单位秒；历史价格类缓存仍按持久缓存处理。
+- `ENABLE_USER_CODE_EXECUTION`: 是否允许执行回测策略和自定义指标代码，默认 `false`。
+- `USER_CODE_MAX_CHARS`: 用户代码最大长度，默认 `20000`。
+- `USER_CODE_ALLOWED_IMPORTS`: 允许用户代码导入的模块列表，逗号分隔，默认不允许导入。
+- `stock_prices` 和 `okx_prices` 默认返回结构化 JSON；如需旧 CSV 文本可传 `response_format=csv`。
 
 <details>
 <summary><strong>个股相关</strong></summary>
@@ -139,9 +100,6 @@ MCP AkTools 支持自定义交易规则文件，在分析走势和买入卖出�
 - `stock_indicators_a` - A股关键指标
 - `stock_indicators_hk` - 港股关键指标
 - `stock_indicators_us` - 美股关键指标
-- `get_trading_rules` - 获取用户配置的交易规则
-- `trading_suggest` - 给出投资建议
-
 </details>
 
 <details>
