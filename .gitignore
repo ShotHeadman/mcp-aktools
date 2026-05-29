@@ -16,10 +16,6 @@ output.txt
 app.log
 logs/
 processing.log
-processing_status.json
-trading_data_results.json
-trading_rules.md
 
 # Data directory (cache database)
 data/
-.kiro/settings/mcp.json
