@@ -9,8 +9,6 @@
 """
 
 import logging
-import pathlib
-import sys
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -18,45 +16,9 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-# 延迟导入以避免循环依赖
-_SQLiteCacheBackend = None
-_DividendChecker = None
-_serialize_dataframe = None
-_deserialize_dataframe = None
-_CacheSerializationError = None
-
-
-def _get_sqlite_backend_class():
-    """延迟导入 SQLiteCacheBackend 以避免循环导入。"""
-    global _SQLiteCacheBackend
-    if _SQLiteCacheBackend is None:
-        from mcp_aktools.cache.sqlite_backend import SQLiteCacheBackend
-        _SQLiteCacheBackend = SQLiteCacheBackend
-    return _SQLiteCacheBackend
-
-
-def _get_dividend_checker_class():
-    """延迟导入 DividendChecker 以避免循环导入。"""
-    global _DividendChecker
-    if _DividendChecker is None:
-        from mcp_aktools.cache.dividend_checker import DividendChecker
-        _DividendChecker = DividendChecker
-    return _DividendChecker
-
-
-def _get_serialization_functions():
-    """延迟导入序列化函数以避免循环导入。"""
-    global _serialize_dataframe, _deserialize_dataframe, _CacheSerializationError
-    if _serialize_dataframe is None:
-        from mcp_aktools.cache.serialization import (
-            serialize_dataframe,
-            deserialize_dataframe,
-            CacheSerializationError,
-        )
-        _serialize_dataframe = serialize_dataframe
-        _deserialize_dataframe = deserialize_dataframe
-        _CacheSerializationError = CacheSerializationError
-    return _serialize_dataframe, _deserialize_dataframe, _CacheSerializationError
+from .dividend_checker import DividendChecker
+from .serialization import CacheSerializationError, deserialize_dataframe, serialize_dataframe
+from .sqlite_backend import SQLiteCacheBackend
 
 
 class CacheKey:
@@ -79,28 +41,23 @@ class CacheKey:
     _dividend_checker: Optional[Any] = None
     _sqlite_initialized: bool = False
 
-    def __init__(self, key: str, ttl: int = 600, ttl2: Optional[int] = None, maxsize: int = 100):
+    def __init__(self, key: str, ttl: int = 600, maxsize: int = 100):
         """初始化缓存键。
         
         参数:
             key: 缓存键字符串。
             ttl: 内存缓存 TTL，单位为秒（默认：600）。
-            ttl2: 磁盘缓存 TTL，单位为秒（已弃用，保留用于向后兼容）。
             maxsize: 内存缓存的最大容量（默认：100）。
         """
         self.key = key
         self.ttl = ttl
-        self.ttl2 = ttl2 or (ttl * 2)  # 保留用于向后兼容
         self.cache1 = TTLCache(maxsize=maxsize, ttl=ttl)
         
-        # 如果存在，从缓存键中提取股票代码（用于分红检查）
         self._symbol = self._extract_symbol_from_key(key)
-        
-        # 如果存在，从缓存键中提取数据类型
         self._data_type = self._extract_data_type_from_key(key)
 
     @staticmethod
-    def init(key: str, ttl: int = 600, ttl2: Optional[int] = None, maxsize: int = 100) -> 'CacheKey':
+    def init(key: str, ttl: int = 600, maxsize: int = 100) -> 'CacheKey':
         """初始化或获取 CacheKey 实例。
         
         这是一个工厂方法，如果给定键已存在 CacheKey 则返回现有实例，
@@ -109,7 +66,6 @@ class CacheKey:
         参数:
             key: 缓存键字符串。
             ttl: 内存缓存 TTL，单位为秒（默认：600）。
-            ttl2: 磁盘缓存 TTL，单位为秒（已弃用，保留用于向后兼容）。
             maxsize: 内存缓存的最大容量（默认：100）。
             
         返回:
@@ -117,7 +73,7 @@ class CacheKey:
         """
         if key in CacheKey.ALL:
             return CacheKey.ALL[key]
-        cache = CacheKey(key, ttl, ttl2, maxsize)
+        cache = CacheKey(key, ttl, maxsize)
         return CacheKey.ALL.setdefault(key, cache)
 
     @classmethod
@@ -135,9 +91,6 @@ class CacheKey:
             return
         
         try:
-            SQLiteCacheBackend = _get_sqlite_backend_class()
-            DividendChecker = _get_dividend_checker_class()
-            
             cls._sqlite_backend = SQLiteCacheBackend(db_path)
             cls._dividend_checker = DividendChecker(cls._sqlite_backend)
             cls._sqlite_initialized = True
@@ -252,17 +205,15 @@ class CacheKey:
                 # 尝试从 SQLite 获取
                 cached_bytes = CacheKey._sqlite_backend.get(self.key)
                 if cached_bytes is not None:
-                    serialize_df, deserialize_df, SerializationError = _get_serialization_functions()
                     try:
-                        value = deserialize_df(cached_bytes)
+                        value = deserialize_dataframe(cached_bytes)
                         logger.debug(f"缓存命中（SQLite）: {self.key}")
                         
-                        # 步骤 3：填充内存缓存（需求 3.3）
                         self.cache1[self.key] = value
                         logger.debug(f"已从 SQLite 填充内存缓存: {self.key}")
                         
                         return value
-                    except SerializationError as e:
+                    except CacheSerializationError as e:
                         logger.error(f"反序列化 {self.key} 的缓存数据失败: {e}")
                         # 删除损坏的缓存条目
                         CacheKey._sqlite_backend.delete(self.key)
@@ -277,7 +228,6 @@ class CacheKey:
         """将数据存储到缓存中。
         
         将数据存储到内存缓存和 SQLite 缓存（如果已初始化）。
-        这实现了需求 3.5：API 获取时的双重存储。
         
         参数:
             val: 要缓存的 DataFrame。
@@ -290,11 +240,10 @@ class CacheKey:
             self.cache1[self.key] = val
             logger.debug(f"缓存已设置（内存）: {self.key} (ttl={self.ttl}s)")
             
-            # 如果已初始化，存储到 SQLite 缓存（永久存储）
+            # 如果已初始化，存储到 SQLite 缓存
             if CacheKey._sqlite_backend is not None:
                 try:
-                    serialize_df, deserialize_df, SerializationError = _get_serialization_functions()
-                    serialized_data = serialize_df(val)
+                    serialized_data = serialize_dataframe(val)
                     CacheKey._sqlite_backend.set(
                         key=self.key,
                         value=serialized_data,
@@ -315,7 +264,6 @@ class CacheKey:
     def delete(self) -> None:
         """从内存和 SQLite 缓存中删除缓存数据。
         
-        这实现了需求 8.3：双重缓存清除。
         """
         try:
             # 从内存缓存删除
@@ -336,8 +284,6 @@ class CacheKey:
     @classmethod
     def clear_by_symbol(cls, symbol: str) -> int:
         """清除特定股票代码的所有缓存条目。
-        
-        这实现了需求 8.1：选择性缓存清除。
         
         参数:
             symbol: 要清除缓存的股票代码。
@@ -373,8 +319,6 @@ class CacheKey:
     def clear_all(cls) -> int:
         """清除所有缓存条目。
         
-        这实现了需求 8.2：完全缓存清除。
-        
         返回:
             清除的条目数量。
         """
@@ -399,8 +343,6 @@ class CacheKey:
     @classmethod
     def get_statistics(cls) -> Dict[str, Any]:
         """获取缓存统计信息。
-        
-        这实现了需求 7.4：缓存统计。
         
         返回:
             包含缓存统计信息的字典。
@@ -427,17 +369,3 @@ class CacheKey:
                 stats["sqlite_error"] = str(e)
         
         return stats
-
-    def get_cache_dir(self) -> pathlib.Path:
-        """获取缓存目录路径。
-        
-        此方法保留用于向后兼容。
-        
-        返回:
-            缓存目录的路径。
-        """
-        home = pathlib.Path.home()
-        name = __package__
-        if sys.platform == "win32":
-            return home / "AppData" / "Local" / "Cache" / name
-        return home / ".cache" / name

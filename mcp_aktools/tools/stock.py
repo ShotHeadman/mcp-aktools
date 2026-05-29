@@ -843,7 +843,7 @@ def _ak_search(
         if market and market != m[0]:
             continue
 
-        all_data = client.call(m[1], ttl=86400, ttl2=86400 * 7)
+        all_data = client.call(m[1], ttl=86400)
         if all_data is None or all_data.empty:
             continue
 

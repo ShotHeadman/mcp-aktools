@@ -1,15 +1,15 @@
 [project]
 name = "mcp-aktools"
-version = "0.1.13"
+version = "0.1.14"
 description = "MCP Server for stock and crypto"
 readme = "README.md"
 requires-python = ">=3.12"
 keywords = ["aktools", "akshare", "stock", "trading", "mcp", "llm"]
 license = { text = "MIT" }
 dependencies = [
-    "akshare>=1.17.0",
+    "akshare>=1.18.63",
     "cachetools>=6.2.0",
-    "fastmcp>=2.0.0",
+    "fastmcp>=3.3.1",
     "pydantic-settings>=2.0.0",
     "pandas-ta>=0.4.0",
     "pyarrow>=14.0.0",

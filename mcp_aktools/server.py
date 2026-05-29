@@ -1,12 +1,4 @@
-"""MCP AkTools 服务器初始化和配置。
-
-此模块负责：
-- 创建和配置 FastMCP 服务器实例
-- 自动注册工具函数
-- 配置 CORS 中间件
-- 集成配置管理
-- 集成日志系统
-"""
+"""MCP 服务器初始化和配置。"""
 
 from typing import Optional
 
@@ -15,6 +7,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .logging_config import get_logger, setup_logging
+from .version import get_version
 
 # 初始化日志系统
 setup_logging()
@@ -22,58 +15,33 @@ logger = get_logger(__name__)
 
 
 def create_mcp_server() -> FastMCP:
-    """创建并配置 MCP 服务器实例。
+    """创建并配置 MCP 服务器实例。"""
+    app_version = get_version()
+    mcp = FastMCP(name="mcp-aktools", version=app_version)
 
-    此函数负责：
-    1. 创建 FastMCP 服务器实例
-    2. 从配置加载设置
-    3. 自动注册所有工具函数
+    logger.info("MCP server created: name=mcp-aktools, version=%s", app_version)
 
-    Returns:
-        FastMCP: 配置好的 MCP 服务器实例
-    """
-    # 创建 MCP 服务器实例
-    mcp = FastMCP(name="mcp-aktools", version="0.1.13")
-
-    logger.info("MCP server created: name=mcp-aktools, version=0.1.13")
-
-    # 注册所有工具函数
     register_tools(mcp)
 
     return mcp
 
 
 def register_tools(mcp: FastMCP) -> None:
-    """自动注册所有工具函数。
-
-    此函数从各个工具模块导入工具函数并注册到 MCP 服务器。
-    工具函数按功能域组织在不同的模块中：
-    - stock: 股票相关工具
-    - crypto: 加密货币工具
-    - market: 市场数据工具
-    - news: 新闻资讯工具
-
-    Args:
-        mcp: FastMCP 服务器实例
-    """
+    """注册所有工具函数。"""
     from pydantic import Field
 
-    # 定义常用字段
     field_symbol = Field(description="股票代码")
     field_market = Field(
         "sh",
         description="股票市场，仅支持: sh(上证), sz(深证), hk(港股), us(美股), 不支持加密货币",
     )
 
-    # 导入工具模块
     from .tools import crypto as crypto_tools
     from .tools import market as market_tools
     from .tools import news as news_tools
     from .tools import stock as stock_tools
 
     logger.info("Registering tools from modules: stock, crypto, market, news")
-
-    # ========== 股票工具 ==========
 
     @mcp.tool(
         title="查找股票代码",
@@ -185,8 +153,6 @@ def register_tools(mcp: FastMCP) -> None:
             symbol=symbol, filter_type=filter_type, min_volume=min_volume
         )
 
-    # ========== 加密货币工具 ==========
-
     @mcp.tool(
         title="获取加密货币历史价格",
         description="获取OKX加密货币的历史K线数据，包括价格、交易量和技术指标",
@@ -240,8 +206,6 @@ def register_tools(mcp: FastMCP) -> None:
         symbol: str = Field("BTC", description="加密货币币种，格式: BTC 或 ETH"),
     ):
         return crypto_tools.binance_ai_report(symbol=symbol)
-
-    # ========== 市场数据工具 ==========
 
     @mcp.tool(
         title="获取当前时间及A股交易日信息",
@@ -335,8 +299,6 @@ def register_tools(mcp: FastMCP) -> None:
     ):
         return market_tools.stock_individual_fund_flow(symbol=symbol, market=market)
 
-    # ========== 新闻工具 ==========
-
     @mcp.tool(
         title="获取股票/加密货币相关新闻",
         description="根据股票代码或加密货币符号获取近期相关新闻",
@@ -353,8 +315,6 @@ def register_tools(mcp: FastMCP) -> None:
     )
     def stock_news_global():
         return news_tools.stock_news_global()
-
-    # ========== 投资建议工具 ==========
 
     @mcp.tool(
         title="获取交易规则",
@@ -384,8 +344,6 @@ def register_tools(mcp: FastMCP) -> None:
             "score": score,
             "reason": reason,
         }
-
-    # ========== 回测工具 ==========
 
     from .tools import backtest as backtest_tools
 
@@ -511,10 +469,8 @@ def run_server(
         host: HTTP 模式的绑定主机，如果为 None 则从配置读取
         port: HTTP 模式的监听端口，如果为 None 则从配置读取
     """
-    # 获取配置
     settings = get_settings()
 
-    # 使用提供的参数或从配置读取
     transport = transport or settings.transport
     host = host or settings.host
     port = port or settings.port
@@ -522,10 +478,8 @@ def run_server(
     logger.info(f"Starting MCP server: transport={transport}, host={host}, port={port}")
 
     if transport == "http":
-        # HTTP 模式：配置 CORS 并启动 HTTP 服务器
         app = mcp.http_app()
         configure_cors(app)
         mcp.run(transport="http", host=host, port=port)
     else:
-        # stdio 模式：启动标准输入输出服务器
         mcp.run()

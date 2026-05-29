@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "mcp-aktools": {
+      "command": "/home/doublechu/Documents/mcp-aktools/.venv/bin/python",
+      "args": [
+        "-m",
+        "mcp_aktools"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "search",
+        "stock_info",
+        "stock_prices",
+        "stock_indicators_a",
+        "stock_news",
+        "get_current_time",
+        "get_trading_rules",
+        "stock_zh_a_minute",
+        "stock_tick_data",
+        "stock_sector_fund_flow_rank",
+        "stock_zt_pool_strong_em",
+        "stock_individual_fund_flow",
+        "evaluate_signals"
+      ]
+    },
+    "Context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp",
+        "--api-key",
+        "ctx7sk-098301c2-3d23-45d5-b7bc-b299d56a4686"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": [
+        "resolve-library-id",
+        "get-library-docs"
+      ]
+    }
+  }
+}

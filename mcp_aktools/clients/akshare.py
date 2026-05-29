@@ -70,7 +70,6 @@ class AkShareClient:
         *args: Any,
         cache_key: Optional[str] = None,
         ttl: Optional[int] = None,
-        ttl2: Optional[int] = None,
         timeout: Optional[float] = None,
         enable_range_completion: bool = True,
         **kwargs: Any,
@@ -89,7 +88,6 @@ class AkShareClient:
             *args: 传递给函数的位置参数
             cache_key: 可选的缓存键（如果为 None，将自动生成）
             ttl: 内存缓存 TTL（秒），如果为 None 使用配置值
-            ttl2: 磁盘缓存 TTL（秒），如果为 None 使用 ttl * 2
             timeout: 请求超时时间（秒），如果为 None 使用 AkShare 默认值
             enable_range_completion: 是否启用范围补全功能（默认 True）
             **kwargs: 传递给函数的关键字参数
@@ -110,8 +108,6 @@ class AkShareClient:
         # 设置 TTL 值
         if ttl is None:
             ttl = self.settings.cache_memory_ttl
-        if ttl2 is None:
-            ttl2 = ttl * 2
 
         # 传递 timeout 参数到 kwargs
         if timeout is not None:
@@ -192,7 +188,7 @@ class AkShareClient:
                         # 同时更新内存缓存（SQLite 已经通过 set_with_range 设置）
                         try:
                             cache = CacheKey.init(
-                                cache_key, ttl=ttl, ttl2=ttl2, maxsize=self.settings.cache_max_size
+                                cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
                             )
                             # 只设置内存缓存，不重复写入 SQLite
                             cache.cache1[cache_key] = result
@@ -270,7 +266,7 @@ class AkShareClient:
                     # 同时更新内存缓存（SQLite 已经通过 set_with_range 设置）
                     try:
                         cache = CacheKey.init(
-                            cache_key, ttl=ttl, ttl2=ttl2, maxsize=self.settings.cache_max_size
+                            cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
                         )
                         # 只设置内存缓存，不重复写入 SQLite
                         cache.cache1[cache_key] = merged_df
@@ -309,7 +305,7 @@ class AkShareClient:
         
         # 初始化缓存
         cache = CacheKey.init(
-            cache_key, ttl=ttl, ttl2=ttl2, maxsize=self.settings.cache_max_size
+            cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
         )
 
         # 尝试从缓存获取
