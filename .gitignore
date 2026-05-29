@@ -19,3 +19,5 @@ processing.log
 
 # Data directory (cache database)
 data/
+
+.env

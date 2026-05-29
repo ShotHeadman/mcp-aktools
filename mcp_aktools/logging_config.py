@@ -9,11 +9,32 @@
 
 import logging
 import logging.handlers
+import json
 import sys
 from pathlib import Path
 from typing import Optional
 
 from .config import Settings
+
+
+class JsonFormatter(logging.Formatter):
+    """JSON 日志格式化器。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(payload, ensure_ascii=False)
 
 
 class LoggingConfig:
@@ -116,7 +137,16 @@ class LoggingConfig:
             配置好的 logging.Formatter 对象
         """
         log_format = self.settings.log_format or self.DEFAULT_FORMAT
-        return logging.Formatter(fmt=log_format, datefmt=self.DEFAULT_DATE_FORMAT)
+        if log_format.lower() == "json":
+            return JsonFormatter(datefmt=self.DEFAULT_DATE_FORMAT)
+
+        try:
+            return logging.Formatter(fmt=log_format, datefmt=self.DEFAULT_DATE_FORMAT)
+        except ValueError:
+            return logging.Formatter(
+                fmt=self.DEFAULT_FORMAT,
+                datefmt=self.DEFAULT_DATE_FORMAT,
+            )
 
     def _create_console_handler(
         self, formatter: logging.Formatter

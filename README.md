@@ -1,25 +1,66 @@
-# 📈 AkTools MCP Server
-
-<!-- mcp-name: io.github.shotheadman/mcp-aktools -->
-<!-- [![MCP Badge](https://lobehub.com/badge/mcp/shotheadman-mcp-aktools)](https://lobehub.com/mcp/shotheadman-mcp-aktools) -->
-<!-- [![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/1dd74d48-e77b-49f9-8d67-8c99603336e1) -->
+# AkTools MCP Server
 
 基于 akshare 的 MCP (Model Context Protocol) 服务器，提供股票数据查询和分析功能。
 
 
 ## 功能
 
-- 🔍 **股票搜索**: 根据股票名称、公司简称等关键词查找股票代码
-- ℹ️ **股票信息**: 获取股票的详细信息，包括价格、市值等
-- 📊 **市场概况**: 获取A股市场的涨停板、龙虎榜、资金流向等
-- 💹 **历史价格**: 获取股票历史价格数据，包含技术分析指标
-- 📰 **相关新闻**: 获取股票相关新闻资讯
-- 💸 **财务指标**: 支持A股和港美股的财务报告关键指标查询
+- 股票搜索、股票信息、历史价格和分时数据
+- A股市场概况、涨停池、龙虎榜、资金流向
+- 个股新闻、全球财经快讯
+- A股、港股、美股财务指标
+- 量化回测和自定义指标
 
 
-## 安装
+## 使用
 
-### 方式1: uvx
+### 公网服务
+
+当前已部署到 FastMCP Cloud / Prefect Horizon:
+
+```text
+https://shotheadman.fastmcp.app/mcp
+```
+
+支持 Streamable HTTP 的 MCP 客户端可直接使用 `url` 方式连接:
+
+```json
+{
+  "mcpServers": {
+    "mcp-aktools": {
+      "url": "https://shotheadman.fastmcp.app/mcp"
+    }
+  }
+}
+```
+
+如果在 Horizon/FastMCP Cloud 中开启了 Authentication，客户端会按 Horizon 的 OAuth 流程完成授权；如果关闭 Authentication，该地址即为公开可访问的 MCP 服务。
+
+### 部署到 Horizon
+
+1. 将本仓库推送到 GitHub。
+2. 打开 [Prefect Horizon](https://horizon.prefect.io/) 并使用 GitHub 登录。
+3. 选择仓库并配置 Server:
+   - Server name: 自定义，例如 `shotheadman`
+   - Entrypoint: `mcp_aktools/__init__.py:mcp`
+   - Authentication: 按需开启；公开服务可关闭
+4. 点击 Deploy Server。
+5. 部署成功后使用生成的地址连接，格式通常为:
+
+```text
+https://<server-name>.fastmcp.app/mcp
+```
+
+本项目的 FastMCP 实例定义在 `mcp_aktools/__init__.py` 中:
+
+```python
+mcp = create_mcp_server()
+```
+
+Horizon 会根据 `pyproject.toml` 自动安装依赖；推送到 `main` 分支后会自动重新部署，并会为 PR 创建预览环境。
+
+### 本地 stdio
+
 ```yaml
 {
   "mcpServers": {
@@ -27,57 +68,89 @@
       "command": "uvx",
       "args": ["mcp-aktools"],
       "env": {
-        # 全部可选
-        "NEWSNOW_BASE_URL": "https://newsnow.busiyi.world", # Newsnow接口地址
-        "NEWSNOW_CHANNELS": "wallstreetcn-quick,cls-telegraph,jin10", # Newsnow资讯来源
+        "NEWSNOW_BASE_URL": "https://newsnow.busiyi.world",
+        "NEWSNOW_CHANNELS": "wallstreetcn-quick,cls-telegraph,jin10"
       }
     }
   }
 }
 ```
 
-### 方式2: [Smithery](https://smithery.ai/server/@shotheadman/mcp-aktools)
-> 需要通过OAuth授权或Smithery key
+其中 `mcp-aktools` 是包名，`mcpServers` 里的 `mcp-aktools` 是客户端中显示的服务名称，可按需改成 `aktools`、`stock-tools` 等别名。
 
-```yaml
+### 本地 HTTP / 局域网
+
+从源码运行:
+
+```bash
+uv sync --locked --no-dev
+uv run python -m mcp_aktools --http --host 0.0.0.0 --port 8808
+```
+
+或使用已发布包:
+
+```bash
+TRANSPORT=http HOST=0.0.0.0 PORT=8808 uvx mcp-aktools
+```
+
+客户端配置:
+
+```json
 {
   "mcpServers": {
     "mcp-aktools": {
-      "url": "https://server.smithery.ai/@shotheadman/mcp-aktools/mcp" # Streamable HTTP
+      "url": "http://127.0.0.1:8808/mcp"
     }
   }
 }
 ```
 
-### 方式3: Docker
+如果要给局域网其他设备访问，请把 `127.0.0.1` 替换为本机局域网 IP。公网自部署时建议放在 Nginx/Caddy 后面，并配置 HTTPS 和访问控制。
+
+### Docker
+
 ```bash
-mkdir /opt/mcp-aktools
+docker compose up -d
+```
+
+默认将容器内 `80` 端口映射到宿主机 `8808`:
+
+```json
+{
+  "mcpServers": {
+    "mcp-aktools": {
+      "url": "http://127.0.0.1:8808/mcp"
+    }
+  }
+}
+```
+
+也可以在服务器上使用远程 compose 文件部署:
+
+```bash
+mkdir -p /opt/mcp-aktools
 cd /opt/mcp-aktools
 wget https://raw.githubusercontent.com/shotheadman/mcp-aktools/refs/heads/main/docker-compose.yml
 docker-compose up -d
 ```
-```yaml
-{
-  "mcpServers": {
-    "mcp-aktools": {
-      "url": "http://0.0.0.0:8808/mcp" # Streamable HTTP
-    }
-  }
-}
-```
 
-### 快速开始
-- 在线体验: [![fastmcp.cloud](https://img.shields.io/badge/Cloud-+?label=FastMCP)](https://fastmcp.cloud/xiaomi/aktools/chat)
-- 在线体验: [![smithery.ai](https://smithery.ai/badge/@shotheadman/mcp-aktools)](https://smithery.ai/server/@shotheadman/mcp-aktools)
-- 添加到 Cursor [![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/zh/install-mcp?name=aktools&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtY3AtYWt0b29scyJdfQ%3D%3D)
-- 添加到 VS Code [![Install MCP Server](https://img.shields.io/badge/VS_Code-+?label=Add+MCP+Server&color=0098FF)](https://insiders.vscode.dev/redirect?url=vscode:mcp/install%3F%7B%22name%22%3A%22aktools%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22mcp-aktools%22%5D%7D)
-- 添加到 Cherry Studio [![Install MCP Server](https://img.shields.io/badge/Cherry_Studio-+?label=Add+MCP+Server&color=FF5F5F)](https://gitee.com/link?target=cherrystudio%3A%2F%2Fmcp%2Finstall%3Fservers%3DeyJtY3BTZXJ2ZXJzIjp7ImFrdG9vbHMiOnsiY29tbWFuZCI6InV2eCIsImFyZ3MiOlsibWNwLWFrdG9vbHMiXX19fQ%3D%3D)
-- 添加到 Claude Code, 执行命令: `claude mcp add aktools -- uvx mcp-aktools`
-- 添加到 OpenAI CodeX, 执行命令: `codex mcp add aktools -- uvx mcp-aktools`
+### 环境变量
+
+常用配置:
+
+```bash
+TRANSPORT=http
+HOST=0.0.0.0
+PORT=8808
+DATABASE_URL=./data/stock_data.db
+NEWSNOW_BASE_URL=
+NEWSNOW_CHANNELS=wallstreetcn-quick,cls-telegraph,jin10
+ENABLE_USER_CODE_EXECUTION=false
+```
 
 ------
 
-## 🛠️ 可用工具
+## 可用工具
 
 ### 高级配置
 
@@ -88,42 +161,19 @@ docker-compose up -d
 - `stock_prices` 默认返回结构化 JSON；如需旧 CSV 文本可传 `response_format=csv`。
 - HTTP 请求默认忽略环境变量和系统代理设置，确保数据源访问行为可预测；如需替换 NewsNow 访问入口，请使用 `NEWSNOW_BASE_URL`。
 
-<details>
-<summary><strong>个股相关</strong></summary>
+### 工具列表
 
 - `search` - 查找股票代码，支持A股、港股、美股
 - `stock_info` - 获取股票信息
 - `stock_prices` - 获取股票历史价格（日线/周线）
 - `stock_zh_a_minute` - A股分时K线数据（支持1/5/15/30/60分钟，默认返回最近3个交易日数据，可自定义1-10个交易日，带备用接口）
 - `stock_tick_data` - A股分笔成交数据（支持大单筛选、买卖盘统计等智能分析）
-- `stock_indicators_a` - A股关键指标
-- `stock_indicators_hk` - 港股关键指标
-- `stock_indicators_us` - 美股关键指标
-</details>
-
-<details>
-<summary><strong>A股市场</strong></summary>
-
+- `stock_indicators_a` / `stock_indicators_hk` / `stock_indicators_us` - 财务关键指标
 - `get_current_time` - 获取当前时间及A股交易日信息
 - `stock_zt_pool_em` - A股涨停股池
 - `stock_zt_pool_strong_em` - A股强势股池
 - `stock_lhb_ggtj_sina` - A股龙虎榜统计
 - `stock_sector_fund_flow_rank` - A股概念资金流向
-
-</details>
-
-<details>
-<summary><strong>财经资讯</strong></summary>
-
-- `stock_news` - 获取个股相关新闻
-- `stock_news_global` - 全球财经快讯
-
-</details>
-
-------
-
-<a href="https://glama.ai/mcp/servers/@al-one/mcp-aktools">
-  <img width="400" src="https://glama.ai/mcp/servers/@al-one/mcp-aktools/badge">
-</a>
-
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/shotheadman-mcp-aktools-badge.png)](https://mseep.ai/app/shotheadman-mcp-aktools)
+- `stock_news` / `stock_news_global` - 个股新闻和全球财经快讯
+- `run_backtest` / `compare_strategies` - 运行和对比回测
+- `register_indicator` / `evaluate_signals` - 自定义指标和技术信号评估

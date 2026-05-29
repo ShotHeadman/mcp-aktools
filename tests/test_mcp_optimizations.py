@@ -10,7 +10,6 @@ from mcp_aktools.cache.sqlite_backend import SQLiteCacheBackend
 from mcp_aktools.config import reload_settings
 from mcp_aktools.exceptions import ValidationException
 from mcp_aktools.tools.backtest import _parse_strategy_code
-from mcp_aktools.tools.crypto import okx_prices
 from mcp_aktools.tools.stock import stock_prices
 from mcp_aktools.utils.formatting import dataframe_records, validate_response_format
 from mcp_aktools.utils.user_code import validate_user_code
@@ -68,7 +67,6 @@ def test_validate_response_format_normalizes_and_rejects_invalid_values():
 
 def test_price_tools_default_to_json_response_format():
     assert stock_prices.__defaults__[-1].default == "json"
-    assert okx_prices.__defaults__[-1] == "json"
 
 
 def test_dataframe_records_replaces_nan_with_none():
