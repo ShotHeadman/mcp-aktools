@@ -79,6 +79,7 @@ def run_backtest(
     take_profit: Optional[float] = None, enable_pyramiding: bool = False,
     max_pyramid_layers: int = 3, pyramid_scale_factor: float = 0.5,
     realtime_indicator: bool = False, signal_priority: str = "buy_first",
+    random_seed: Optional[int] = None,
 ) -> str:
     """运行回测工具。
     
@@ -99,7 +100,8 @@ def run_backtest(
         pyramid_scale_factor: 加仓比例递减因子
         realtime_indicator: 是否使用实时指标模式
         signal_priority: 信号优先级
-    
+        random_seed: 随机种子，设置后滑点可复现（便于复现与策略对比），默认 None
+
     Returns:
         格式化的回测结果字符串
     """
@@ -114,6 +116,7 @@ def run_backtest(
             max_pyramid_layers=max_pyramid_layers,
             pyramid_scale_factor=pyramid_scale_factor,
             realtime_indicator=realtime_indicator, signal_priority=signal_priority,
+            random_seed=random_seed,
         )
         strategy_class = _parse_strategy_code(strategy_code)
         engine = BacktestEngine(config)
@@ -242,7 +245,7 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         else:
             end_date = datetime.now()
         
-        # 获取过去120个交易日的数据（确保有足够数据计算指标）
+        # 向前取约180个自然日的数据（确保有足够交易日用于计算指标）
         start_date = end_date - timedelta(days=180)
         
         # 创建配置
@@ -276,8 +279,12 @@ def evaluate_signals(stock_code: str, date: str = "") -> str:
         # MACD 信号
         macd_golden = signal_calc.macd_golden_cross(last_index)
         macd_death = signal_calc.macd_death_cross(last_index)
-        macd_golden_strong = signal_calc.macd_golden_cross_strong(last_index)
-        macd_death_strong = signal_calc.macd_death_cross_strong(last_index)
+        macd_golden_strong = signal_calc.macd_golden_cross_strong(
+            last_index, frequency=config.frequency
+        )
+        macd_death_strong = signal_calc.macd_death_cross_strong(
+            last_index, frequency=config.frequency
+        )
         
         signals.append("## MACD 信号")
         signals.append(f"- 金叉: {'✅ 是' if macd_golden else '❌ 否'}")

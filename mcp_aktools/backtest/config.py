@@ -82,9 +82,21 @@ class BacktestConfig:
     # - "none": 不执行任何操作（保守策略）
     signal_priority: str = "buy_first"
 
+    # 随机种子：设置后滑点序列可复现，便于回测复现与策略公平对比；None 表示不固定
+    random_seed: Optional[int] = None
+
     def __post_init__(self) -> None:
-        """初始化后自动验证配置参数。"""
+        """初始化后自动验证配置参数并初始化随机数发生器。"""
         self.validate()
+        self.reset_rng()
+
+    def reset_rng(self) -> None:
+        """重置滑点随机数发生器到初始种子状态。
+
+        每次回测开始前调用，确保相同 random_seed 下滑点序列完全一致。
+        _rng 非 dataclass 字段，不参与 asdict/序列化。
+        """
+        self._rng = random.Random(self.random_seed)
 
     def validate(self) -> None:
         """验证配置参数有效性。
@@ -211,13 +223,13 @@ class BacktestConfig:
     def get_random_slippage(self) -> float:
         """获取随机滑点值。
 
-        在 [slippage_min, slippage_max] 范围内随机取值，
-        用于模拟真实市场的价格波动。
+        在 [slippage_min, slippage_max] 范围内取值，用于模拟真实市场的价格波动。
+        若设置了 random_seed，则滑点序列可复现（配合 reset_rng 使用）。
 
         Returns:
             float: 随机滑点值
         """
-        return random.uniform(self.slippage_min, self.slippage_max)
+        return self._rng.uniform(self.slippage_min, self.slippage_max)
 
     def to_json(self) -> str:
         """序列化为JSON字符串。

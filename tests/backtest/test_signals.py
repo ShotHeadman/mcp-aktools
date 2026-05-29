@@ -271,6 +271,21 @@ class TestEvaluateCondition:
         calc = calc_with_all_indicators
         assert calc.evaluate_condition("unknown_signal", 2) is False
 
+    def test_evaluate_custom_indicator_reads_cached_column(self):
+        """注册后 evaluate_condition 应优先读取已缓存的列（不再重算）。"""
+        df = pd.DataFrame({"close": [10.0, 11.0, 12.0]})
+        calc = SignalCalculator(df)
+        indicator = CustomIndicator(
+            name="signal_flag",
+            description="布尔信号",
+            function_code="result = df['close'] > 10.5",
+        )
+        calc.register_indicator(indicator)
+        # 列在注册时已写入；evaluate_condition 直接读列值
+        assert "signal_flag" in calc.data.columns
+        assert calc.evaluate_condition("signal_flag", 0) is False  # 10.0 > 10.5 → False
+        assert calc.evaluate_condition("signal_flag", 2) is True   # 12.0 > 10.5 → True
+
 
 class TestGetIndicatorValue:
     """测试获取指标值功能。"""
@@ -317,3 +332,34 @@ class TestSignalType:
         assert SignalType.OVERSOLD.value == "oversold"
         assert SignalType.UPPER_BREAK.value == "upper_break"
         assert SignalType.LOWER_BREAK.value == "lower_break"
+
+
+class TestAdaptiveStrongCross:
+    """测试 MACD 强金叉/死叉的自适应阈值（按频率生效）。
+
+    修复前 dif_threshold 默认为数值，自适应分支永不执行，d 与 60 行为相同；
+    修复后默认 None 触发自适应，不同频率使用不同阈值。
+    """
+
+    def test_death_cross_strong_adapts_to_frequency(self):
+        # index=1 发生普通死叉，prev_dif=4（未跨零轴）
+        df = pd.DataFrame({"DIF": [4.0, 2.0], "DEA": [3.0, 3.0]})
+        calc = SignalCalculator(df)
+        # 日线阈值 10：4 未超过，不触发强死叉
+        assert calc.macd_death_cross_strong(1, frequency="d") is False
+        # 60分钟阈值 3.5：4 超过，触发强死叉
+        assert calc.macd_death_cross_strong(1, frequency="60") is True
+
+    def test_golden_cross_strong_adapts_to_frequency(self):
+        # index=1 发生普通金叉，prev_dif=-4（未跨零轴）
+        df = pd.DataFrame({"DIF": [-4.0, -2.0], "DEA": [-3.0, -3.0]})
+        calc = SignalCalculator(df)
+        assert calc.macd_golden_cross_strong(1, frequency="d") is False
+        assert calc.macd_golden_cross_strong(1, frequency="60") is True
+
+    def test_explicit_threshold_overrides_adaptive(self):
+        # 显式传入阈值时不走自适应字典
+        df = pd.DataFrame({"DIF": [4.0, 2.0], "DEA": [3.0, 3.0]})
+        calc = SignalCalculator(df)
+        assert calc.macd_death_cross_strong(1, dif_threshold=3.5) is True
+        assert calc.macd_death_cross_strong(1, dif_threshold=100.0) is False
