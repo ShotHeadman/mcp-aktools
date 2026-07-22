@@ -7,19 +7,19 @@ requires-python = ">=3.12"
 keywords = ["aktools", "akshare", "stock", "trading", "mcp", "llm"]
 license = { text = "MIT" }
 dependencies = [
-    "akshare>=1.18.63",
-    "cachetools>=6.2.0",
-    "fastmcp>=3.3.1",
-    "pydantic-settings>=2.0.0",
+    "akshare>=1.18.72",
+    "cachetools>=7.1.4",
+    "fastmcp>=3.4.4",
+    "pydantic-settings>=2.14.2",
     "pandas-ta>=0.4.0",
-    "pyarrow>=14.0.0",
+    "pyarrow>=25.0.0",
 ]
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8.0.0",
-    "hypothesis>=6.100.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=9.1.1",
+    "hypothesis>=6.158.1",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]

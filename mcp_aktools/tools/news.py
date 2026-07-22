@@ -58,7 +58,27 @@ def stock_news(
 
         logger.info(f"获取新闻: symbol={symbol}, limit={limit}")
 
-        # 获取新闻数据
+        # 优先使用财联社新闻接口
+        try:
+            client = get_akshare_client()
+            cls_df = client.call(ak.stock_news_cls, symbol=symbol, ttl=1800)
+            if cls_df is not None and not cls_df.empty:
+                # 尝试常见的列名
+                content_col = None
+                for col in ["content", "title", "新闻内容", "标题"]:
+                    if col in cls_df.columns:
+                        content_col = col
+                        break
+                if content_col:
+                    news_list = list(dict.fromkeys(cls_df[content_col].dropna().astype(str).tolist()))
+                    if news_list:
+                        return "\n".join(news_list[0:limit])
+                # 如果找不到特有列，直接返回 raw dataframe text
+                return cls_df.head(limit).to_string(index=False)
+        except Exception as e:
+            logger.warning(f"财联社新闻接口失败，尝试东财接口: {e}")
+
+        # 尝试东财接口
         news_df = _stock_news_em(symbol, limit=20)
 
         if news_df is None or news_df.empty:

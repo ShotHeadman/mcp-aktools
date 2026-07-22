@@ -10,8 +10,13 @@ from ..exceptions import ValidationException
 VALID_RESPONSE_FORMATS = {"csv", "json"}
 
 
-def validate_response_format(response_format: str, default: str = "csv") -> str:
+def validate_response_format(response_format: Any, default: str = "csv") -> str:
     """验证并规范化工具返回格式。"""
+    if not isinstance(response_format, str):
+        if hasattr(response_format, "default") and isinstance(getattr(response_format, "default"), str):
+            response_format = getattr(response_format, "default")
+        else:
+            response_format = default
     normalized = (response_format or default).strip().lower()
     if normalized not in VALID_RESPONSE_FORMATS:
         raise ValidationException(

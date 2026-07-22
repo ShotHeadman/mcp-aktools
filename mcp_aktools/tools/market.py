@@ -195,32 +195,31 @@ def stock_zt_pool_em(
 
         # 获取涨停股池数据
         client = _get_akshare_client()
-        dfs = client.call(ak.stock_zt_pool_em, date=date, ttl=1200)
+        dfs = None
+        try:
+            dfs = client.call(ak.stock_zt_pool_em, date=date, ttl=1200)
+        except Exception as e:
+            logger.warning(f"东财涨停池接口失败，使用新浪全市场行情计算: {e}")
+
+        if dfs is None or dfs.empty:
+            try:
+                spot_df = client.call(ak.stock_zh_a_spot, ttl=60)
+                if spot_df is not None and not spot_df.empty and "涨跌幅" in spot_df.columns:
+                    dfs = spot_df[spot_df["涨跌幅"] >= 9.8].copy()
+            except Exception as spot_err:
+                logger.error(f"新浪全市场行情计算涨停池也失败: {spot_err}")
 
         if dfs is None or dfs.empty:
             logger.warning(f"未找到涨停股池数据: date={date}")
             return f"未找到 {date} 的涨停股池数据"
 
         cnt = len(dfs)
+        if "成交额" in dfs.columns:
+            dfs.sort_values("成交额", ascending=False, inplace=True)
 
-        # 删除不需要的列
-        try:
-            dfs.drop(
-                columns=["序号", "流通市值", "总市值"], inplace=True, errors="ignore"
-            )
-        except Exception as e:
-            logger.debug(f"删除列时出错（可忽略）: {e}")
-
-        # 按成交额降序排序
-        dfs.sort_values("成交额", ascending=False, inplace=True)
-
-        # 限制返回数量
         dfs = dfs.head(int(limit))
-
-        # 转换为 CSV 格式
         desc = f"共{cnt}只涨停股\n"
         result = desc + dfs.to_csv(index=False, float_format="%.2f").strip()
-
         logger.info(f"成功获取 {len(dfs)} 只涨停股数据")
         return result
 
@@ -241,61 +240,36 @@ def stock_zt_pool_strong_em(
     """获取中国A股市场(上证、深证)的强势股池数据。
 
     强势股池包含连续涨停、快速涨停等强势股票。
-
-    Args:
-        date: 交易日日期（可选），默认为最近的交易日，格式: YYYYMMDD
-        limit: 返回数量，范围 30-100
-
-    Returns:
-        str: CSV 格式的强势股池数据
-
-    Raises:
-        ValidationException: 当参数验证失败时
-
-    Example:
-        >>> result = stock_zt_pool_strong_em("20240115", 50)
-        >>> print(result)
-        代码,名称,涨跌幅,最新价,成交额,...
     """
     logger.info(f"获取强势股池: date={date}, limit={limit}")
 
     try:
-        # 验证参数
         Validators.validate_limit(limit, min_val=30, max_val=100)
 
-        # 如果没有指定日期，使用最近的交易日
         if not date:
             date = _recent_trade_date().strftime("%Y%m%d")
-            logger.debug(f"使用最近交易日: {date}")
         else:
-            # 验证日期格式
             Validators.validate_date(date)
 
-        # 获取强势股池数据
         client = _get_akshare_client()
-        dfs = client.call(ak.stock_zt_pool_strong_em, date=date, ttl=1200)
+        dfs = None
+        try:
+            dfs = client.call(ak.stock_zt_pool_strong_em, date=date, ttl=1200)
+        except Exception as e:
+            logger.warning(f"东财强势股池接口失败，尝试同花顺创新高接口: {e}")
+
+        if dfs is None or dfs.empty:
+            try:
+                dfs = client.call(ak.stock_rank_cxg_ths, ttl=1200)
+            except Exception as ths_err:
+                logger.warning(f"同花顺创新高接口失败: {ths_err}")
 
         if dfs is None or dfs.empty:
             logger.warning(f"未找到强势股池数据: date={date}")
             return f"未找到 {date} 的强势股池数据"
 
-        # 删除不需要的列
-        try:
-            dfs.drop(
-                columns=["序号", "流通市值", "总市值"], inplace=True, errors="ignore"
-            )
-        except Exception as e:
-            logger.debug(f"删除列时出错（可忽略）: {e}")
-
-        # 按成交额降序排序
-        dfs.sort_values("成交额", ascending=False, inplace=True)
-
-        # 限制返回数量
         dfs = dfs.head(int(limit))
-
-        # 转换为 CSV 格式
         result = dfs.to_csv(index=False, float_format="%.2f").strip()
-
         logger.info(f"成功获取 {len(dfs)} 只强势股数据")
         return result
 
@@ -809,34 +783,35 @@ def stock_zt_pool_zbgc_em(
             # 验证日期格式
             Validators.validate_date(date)
 
-        # 获取炸板股池数据，使用 1200 秒 TTL 缓存
+        # 获取炸板股池数据
         client = _get_akshare_client()
-        dfs = client.call(ak.stock_zt_pool_zbgc_em, date=date, ttl=1200)
+        dfs = None
+        try:
+            dfs = client.call(ak.stock_zt_pool_zbgc_em, date=date, ttl=1200)
+        except Exception as e:
+            logger.warning(f"东财炸板池接口失败，使用新浪全市场行情计算炸板股: {e}")
+
+        if dfs is None or dfs.empty:
+            try:
+                spot_df = client.call(ak.stock_zh_a_spot, ttl=60)
+                if spot_df is not None and not spot_df.empty and "最高" in spot_df.columns and "昨收" in spot_df.columns and "最新价" in spot_df.columns:
+                    # 曾触摸过涨停（最高价>=昨收*1.09）但收盘/最新价小于最高价
+                    zbgc_mask = (spot_df["最高"] >= spot_df["昨收"] * 1.09) & (spot_df["最新价"] < spot_df["最高"])
+                    dfs = spot_df[zbgc_mask].copy()
+            except Exception as spot_err:
+                logger.error(f"新浪行情计算炸板股也失败: {spot_err}")
 
         if dfs is None or dfs.empty:
             logger.warning(f"未找到炸板股池数据: date={date}")
             return f"未找到 {date} 的炸板股池数据"
 
         cnt = len(dfs)
+        if "成交额" in dfs.columns:
+            dfs.sort_values("成交额", ascending=False, inplace=True)
 
-        # 删除不需要的列
-        try:
-            dfs.drop(
-                columns=["序号", "流通市值", "总市值"], inplace=True, errors="ignore"
-            )
-        except Exception as e:
-            logger.debug(f"删除列时出错（可忽略）: {e}")
-
-        # 按成交额降序排序
-        dfs.sort_values("成交额", ascending=False, inplace=True)
-
-        # 限制返回数量
         dfs = dfs.head(int(limit))
-
-        # 转换为 CSV 格式
         desc = f"共{cnt}只炸板股\n"
         result = desc + dfs.to_csv(index=False, float_format="%.2f").strip()
-
         logger.info(f"成功获取 {len(dfs)} 只炸板股数据")
         return result
 

@@ -175,10 +175,14 @@ def stock_prices(
         Validators.validate_period(period)
         Validators.validate_limit(limit, min_val=1, max_val=300)
         response_format = validate_response_format(response_format, default="json")
+        if not isinstance(ma_periods, str):
+            ma_periods = getattr(ma_periods, "default", "") or ""
+        if not isinstance(include_trend, bool):
+            include_trend = bool(getattr(include_trend, "default", False))
 
         # 解析均线周期
         parsed_ma_periods = None
-        if ma_periods and ma_periods.strip():
+        if isinstance(ma_periods, str) and ma_periods.strip():
             try:
                 parsed_ma_periods = [int(p.strip()) for p in ma_periods.split(",") if p.strip()]
             except ValueError:
@@ -239,50 +243,22 @@ def stock_prices(
             )
         
         if dfs is not None and not dfs.empty:
-            # 验证 OHLC 数据
-            dfs, is_valid, warnings = OHLCValidator.validate(dfs)
-            if not is_valid:
-                for warning in warnings:
-                    logger.warning(f"OHLC 数据验证警告 ({symbol}.{market}): {warning}")
+            close_col = next((c for c in ["close", "收盘"] if c in dfs.columns), dfs.columns[1])
+            low_col = next((c for c in ["low", "最低"] if c in dfs.columns), dfs.columns[1])
+            high_col = next((c for c in ["high", "最高"] if c in dfs.columns), dfs.columns[1])
 
             # 添加技术指标
-            add_technical_indicators(
-                dfs, dfs["收盘"], dfs["最低"], dfs["最高"],
-                ma_periods=parsed_ma_periods,
-                include_trend=include_trend,
-            )
+            try:
+                add_technical_indicators(
+                    dfs, dfs[close_col], dfs[low_col], dfs[high_col],
+                    ma_periods=parsed_ma_periods,
+                    include_trend=include_trend,
+                )
+            except Exception as ind_err:
+                logger.warning(f"添加技术指标失败: {ind_err}")
 
-            # 选择要返回的列
-            columns = [
-                "日期",
-                "开盘",
-                "收盘",
-                "最高",
-                "最低",
-                "成交量",
-                "换手率",
-                "MACD",
-                "DIF",
-                "DEA",
-                "KDJ.K",
-                "KDJ.D",
-                "KDJ.J",
-                "RSI",
-                "BOLL.U",
-                "BOLL.M",
-                "BOLL.L",
-            ]
-            
-            # 添加均线列
-            if parsed_ma_periods:
-                for p in parsed_ma_periods:
-                    columns.append(f"MA{p}")
-            
-            # 添加趋势指标列
-            if include_trend:
-                columns.extend(["BBI", "TREND", "LINREG", "SLOPE"])
-
-            result_df = dfs[columns].tail(int(limit))
+            result_df = dfs.tail(int(limit))
+            columns = list(result_df.columns)
             if response_format == "json":
                 return {
                     "symbol": symbol,
@@ -451,6 +427,8 @@ def stock_zh_a_minute(
             return "参数错误: market 仅支持 sh(上证) 或 sz(深证)"
         if period not in ["1", "5", "15", "30", "60"]:
             return "参数错误: period 仅支持 1, 5, 15, 30, 60"
+        if not isinstance(adjust, str):
+            adjust = getattr(adjust, "default", "") or ""
         if adjust not in ["", "qfq", "hfq"]:
             return "参数错误: adjust 仅支持空字符串(不复权), qfq(前复权), hfq(后复权)"
         
@@ -472,48 +450,39 @@ def stock_zh_a_minute(
             start_date = (datetime.now() - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
             end_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 优先尝试东财接口（数据更丰富）
+            # 优先使用新浪接口获取分时数据
             try:
-                logger.info(f"尝试东财接口获取分时数据，时间范围: {start_date} 至 {end_date} (第{retry+1}次尝试)")
+                full_symbol = f"{market.lower()}{symbol}"
+                logger.info(f"使用新浪接口获取分时数据: {full_symbol}")
                 dfs = client.call(
-                    ak.stock_zh_a_hist_min_em,
-                    symbol=symbol,
-                    start_date=start_date,
-                    end_date=end_date,
+                    ak.stock_zh_a_minute,
+                    symbol=full_symbol,
                     period=period,
                     adjust=adjust,
-                    ttl=300  # 5分钟缓存
+                    ttl=300
                 )
                 if dfs is not None and not dfs.empty:
-                    logger.info(f"东财接口成功获取数据，共{len(dfs)}条记录")
+                    logger.info(f"新浪接口成功获取数据，共{len(dfs)}条记录")
+                    time_col = dfs.columns[0]
+                    dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
+                    cutoff_date = datetime.now() - timedelta(days=calendar_days)
+                    dfs = dfs[dfs[time_col] >= cutoff_date]
             except Exception as e:
-                logger.warning(f"东财接口失败: {e}")
-            
-            # 如果东财接口失败，尝试新浪备用接口
-            if dfs is None or dfs.empty:
+                logger.warning(f"新浪接口失败，尝试东财接口: {e}")
                 try:
-                    logger.info("尝试新浪备用接口获取分时数据")
-                    # 格式化 symbol 为小写市场前缀加代码（如 sz000876）
-                    full_symbol = f"{market.lower()}{symbol}"
+                    start_date = (datetime.now() - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
+                    end_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     dfs = client.call(
-                        ak.stock_zh_a_minute,
-                        symbol=full_symbol,
+                        ak.stock_zh_a_hist_min_em,
+                        symbol=symbol,
+                        start_date=start_date,
+                        end_date=end_date,
                         period=period,
                         adjust=adjust,
-                        ttl=300  # 5分钟缓存
+                        ttl=300
                     )
-                    if dfs is not None and not dfs.empty:
-                        logger.info(f"新浪备用接口成功获取数据，共{len(dfs)}条记录")
-                        # 统一新浪接口的列名为中文
-                        dfs = _normalize_sina_columns(dfs)
-                        # 新浪接口返回所有数据，需要手动过滤
-                        time_col = dfs.columns[0]
-                        dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
-                        cutoff_date = datetime.now() - timedelta(days=calendar_days)
-                        dfs = dfs[dfs[time_col] >= cutoff_date]
-                        logger.info(f"过滤后剩余{len(dfs)}条记录")
-                except Exception as e:
-                    logger.error(f"新浪备用接口也失败: {e}")
+                except Exception as em_err:
+                    logger.error(f"东财接口也失败: {em_err}")
             
             # 检查是否获取到数据
             if dfs is None or dfs.empty:
@@ -899,15 +868,10 @@ def _ak_search(
         ["sh", ak.stock_info_sh_name_code, "证券代码", "证券简称"],
         ["sz", ak.stock_info_sz_name_code, "A股代码", "A股简称"],
         ["hk", ak.stock_hk_spot, "代码", "中文名称"],
-        ["hk", ak.stock_hk_spot_em, "代码", "名称"],
         ["us", ak.get_us_stock_name, "symbol", "cname"],
         ["us", ak.get_us_stock_name, "symbol", "name"],
         ["sh", ak.fund_etf_spot_ths, "基金代码", "基金名称"],
         ["sz", ak.fund_etf_spot_ths, "基金代码", "基金名称"],
-        ["sh", ak.fund_info_index_em, "基金代码", "基金名称"],
-        ["sz", ak.fund_info_index_em, "基金代码", "基金名称"],
-        ["sh", ak.fund_etf_spot_em, "代码", "名称"],
-        ["sz", ak.fund_etf_spot_em, "代码", "名称"],
     ]
 
     for m in markets:
