@@ -165,7 +165,7 @@ ENABLE_USER_CODE_EXECUTION=false
 
 - `search` - 查找股票代码，支持A股、港股、美股
 - `stock_info` - 获取股票信息
-- `stock_prices` - 获取股票历史价格（日线/周线）
+- `stock_prices` - 获取股票历史价格（日线/周线/月线，美股仅支持日线）
 - `stock_zh_a_minute` - A股分时K线数据（支持1/5/15/30/60分钟，默认返回最近3个交易日数据，可自定义1-10个交易日，带备用接口）
 - `stock_tick_data` - A股分笔成交数据（支持大单筛选、买卖盘统计等智能分析）
 - `stock_indicators_a` / `stock_indicators_hk` / `stock_indicators_us` - 财务关键指标
@@ -177,3 +177,7 @@ ENABLE_USER_CODE_EXECUTION=false
 - `stock_news` / `stock_news_global` - 个股新闻和全球财经快讯
 - `run_backtest` / `compare_strategies` - 运行和对比回测
 - `register_indicator` / `evaluate_signals` - 自定义指标和技术信号评估
+
+A 股日线缓存按调用的 TTL 刷新最后一根 K 线，周线和月线由日线聚合。
+分钟回测使用分钟行情接口，可用历史区间受上游数据源限制。
+涨停池、强势股池和炸板池仅返回指定日期的东方财富数据；数据源不可用时返回失败信息。

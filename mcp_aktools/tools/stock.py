@@ -10,6 +10,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import akshare as ak
 import pandas as pd
@@ -148,7 +149,7 @@ def stock_prices(
     symbol: str = field_symbol,
     market: str = field_market,
     period: str = Field(
-        "daily", description="周期，如: daily(日线), weekly(周线), monthly(月线，不支持美股)"
+        "daily", description="周期: daily(日线)、weekly(周线)、monthly(月线)；美股仅支持 daily"
     ),
     limit: int = Field(30, description="返回数量(int)", strict=False),
     ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
@@ -173,6 +174,8 @@ def stock_prices(
         Validators.validate_symbol(symbol)
         Validators.validate_market(market)
         Validators.validate_period(period)
+        if market == "us" and period != "daily":
+            raise ValidationException("period", "美股历史价格仅支持 daily")
         Validators.validate_limit(limit, min_val=1, max_val=300)
         response_format = validate_response_format(response_format, default="json")
         if not isinstance(ma_periods, str):
@@ -218,8 +221,7 @@ def stock_prices(
                 ttl=3600
             )
         elif market == "hk":
-            dfs = client.call(
-                ak.stock_hk_hist,
+            dfs = client.stock_hk_hist(
                 symbol=symbol,
                 period=period,
                 start_date=start_date,
@@ -230,7 +232,8 @@ def stock_prices(
                 _stock_us_daily,
                 symbol=symbol,
                 start_date=start_date,
-                ttl=3600
+                ttl=3600,
+                use_disk_cache=False,
             )
         else:
             # 尝试 ETF
@@ -407,15 +410,15 @@ def stock_zh_a_minute(
     """获取A股分时K线数据。
 
     获取指定股票的历史分时数据，支持1/5/15/30/60分钟周期。
-    优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。
-    默认返回最近5个交易日的分时数据，以减少token消耗。
+    优先使用新浪接口，失败或没有所需区间的数据时尝试东财。
+    默认返回最近3个交易日的分时数据，以减少token消耗。
 
     Args:
         symbol: 股票代码
         market: 市场类型（sh/sz）
         period: 分钟周期（1/5/15/30/60）
         adjust: 复权类型（空字符串/qfq/hfq），注意1分钟数据不支持复权
-        trading_days: 返回最近N个交易日的数据（默认5，最大30）
+        trading_days: 返回最近N个交易日的数据（默认3，最大10）
 
     Returns:
         str: CSV 格式的分时数据（最近N个交易日）
@@ -431,6 +434,8 @@ def stock_zh_a_minute(
             adjust = getattr(adjust, "default", "") or ""
         if adjust not in ["", "qfq", "hfq"]:
             return "参数错误: adjust 仅支持空字符串(不复权), qfq(前复权), hfq(后复权)"
+        if period == "1" and adjust:
+            return "参数错误: 1分钟行情仅支持不复权"
         
         # 处理并限制交易日数量（默认3天，最大10天）
         if not isinstance(trading_days, int):
@@ -445,44 +450,24 @@ def stock_zh_a_minute(
         max_retries = 3
         calendar_days = 7  # 初始获取7个自然日的数据
         dfs = None
+        now = datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
         
         for retry in range(max_retries):
-            start_date = (datetime.now() - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
-            end_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # 优先使用新浪接口获取分时数据
+            start_date = (now - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
+            end_date = now.strftime("%Y-%m-%d %H:%M:%S")
+
             try:
-                full_symbol = f"{market.lower()}{symbol}"
-                logger.info(f"使用新浪接口获取分时数据: {full_symbol}")
-                dfs = client.call(
-                    ak.stock_zh_a_minute,
-                    symbol=full_symbol,
+                dfs = client.stock_zh_a_hist_min(
+                    symbol=symbol,
+                    market=market,
                     period=period,
+                    start_date=start_date,
+                    end_date=end_date,
                     adjust=adjust,
-                    ttl=300
+                    ttl=300,
                 )
-                if dfs is not None and not dfs.empty:
-                    logger.info(f"新浪接口成功获取数据，共{len(dfs)}条记录")
-                    time_col = dfs.columns[0]
-                    dfs[time_col] = pd.to_datetime(dfs[time_col], errors='coerce')
-                    cutoff_date = datetime.now() - timedelta(days=calendar_days)
-                    dfs = dfs[dfs[time_col] >= cutoff_date]
             except Exception as e:
-                logger.warning(f"新浪接口失败，尝试东财接口: {e}")
-                try:
-                    start_date = (datetime.now() - timedelta(days=calendar_days)).strftime("%Y-%m-%d 09:30:00")
-                    end_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    dfs = client.call(
-                        ak.stock_zh_a_hist_min_em,
-                        symbol=symbol,
-                        start_date=start_date,
-                        end_date=end_date,
-                        period=period,
-                        adjust=adjust,
-                        ttl=300
-                    )
-                except Exception as em_err:
-                    logger.error(f"东财接口也失败: {em_err}")
+                logger.warning("分钟行情获取失败: %s", e)
             
             # 检查是否获取到数据
             if dfs is None or dfs.empty:

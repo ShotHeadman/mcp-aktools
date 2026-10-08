@@ -67,8 +67,8 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         title="获取股票历史价格",
-        description="根据股票代码和市场获取股票日线或周线级别的历史价格及技术指标。"
-        "此接口用于获取日线(daily)或周线(weekly)数据，不适用于分钟级别数据。"
+        description="根据股票代码和市场获取股票日线、周线或月线级别的历史价格及技术指标。"
+        "此接口用于获取日线(daily)、周线(weekly)或月线(monthly)数据，不适用于分钟级别数据。"
         "如需分钟级别的分时数据，请使用 stock_zh_a_minute 接口。"
         "可通过ma_periods添加均线系统，如常用均线5,10,20,30,60,120,250或斐波那契均线5,8,13,21,34,55,89,144,233。"
         "可通过include_trend添加趋势指标(BBI/TREND/LINREG/SLOPE)。",
@@ -77,7 +77,7 @@ def register_tools(mcp: FastMCP) -> None:
         symbol: str = field_symbol,
         market: str = field_market,
         period: str = Field(
-            "daily", description="周期，如: daily(日线), weekly(周线，不支持美股)"
+            "daily", description="周期: daily(日线)、weekly(周线)、monthly(月线)；美股仅支持 daily"
         ),
         limit: int = Field(30, description="返回数量(int)", strict=False),
         ma_periods: str = Field("", description="均线周期列表，逗号分隔，如: 5,10,20,30,60,120,250 或斐波那契: 5,8,13,21,34,55,89,144,233"),
@@ -121,15 +121,15 @@ def register_tools(mcp: FastMCP) -> None:
         title="A股分时K线数据",
         description="获取A股分钟级别的分时K线数据，支持1/5/15/30/60分钟周期。"
         "此接口仅用于获取分时数据，仅在用户明确请求分时数据、分钟数据或分钟K线时使用。"
-        "如需日线或周线数据，请使用 stock_prices 接口。"
-        "优先使用东财接口（数据更丰富），失败时自动切换到新浪备用接口。默认返回最近3个交易日数据",
+        "如需日线、周线或月线数据，请使用 stock_prices 接口。"
+        "优先使用新浪接口，失败或无所需区间数据时尝试东财。默认返回最近3个交易日数据",
     )
     def stock_zh_a_minute(
         symbol: str = field_symbol,
         market: str = field_market,
         period: str = Field("5", description="分钟周期，仅支持: 1, 5, 15, 30, 60"),
         adjust: str = Field(
-            "", description="复权类型: 空字符串(不复权), qfq(前复权), hfq(后复权)"
+            "", description="复权类型: 空字符串(不复权), qfq(前复权), hfq(后复权)；1分钟仅支持不复权"
         ),
         trading_days: int = Field(3, description="返回最近N个交易日的数据，默认3天，最大10天", strict=False),
     ):

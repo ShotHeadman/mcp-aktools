@@ -128,27 +128,25 @@ class BacktestEngine:
                 f"扩展开始日期={extended_start_date}, 预热K线数={warmup_bars}"
             )
             
-            # 映射周期参数
-            period_map = {
-                "d": "daily",
-                "w": "weekly",
-                "m": "monthly",
-                "1": "1",
-                "5": "5",
-                "15": "15",
-                "30": "30",
-                "60": "60",
-            }
-            period = period_map.get(self.config.frequency, "daily")
-            
-            # 获取K线数据（使用扩展的开始日期）
-            df = client.stock_zh_a_hist(
-                symbol=symbol,
-                market=market,
-                period=period,
-                start_date=extended_start_date,
-                ttl=3600  # 1小时缓存
-            )
+            # 分钟回测使用分钟接口；所有请求都限定到回测结束日。
+            if freq in {"1", "5", "15", "30", "60"}:
+                df = client.stock_zh_a_hist_min(
+                    symbol=symbol,
+                    market=market,
+                    period=freq,
+                    start_date=extended_start_date,
+                    end_date=self.config.end_date,
+                    ttl=300,
+                )
+            else:
+                df = client.stock_zh_a_hist(
+                    symbol=symbol,
+                    market=market,
+                    period={"d": "daily", "w": "weekly", "m": "monthly"}[freq],
+                    start_date=extended_start_date,
+                    end_date=self.config.end_date.replace("-", ""),
+                    ttl=3600,
+                )
             
             if df is None or df.empty:
                 raise BacktestError(
@@ -240,7 +238,7 @@ class BacktestEngine:
         # 确保日期列存在
         if "date" not in df.columns:
             # 尝试其他可能的日期列名
-            for col in ["时间", "datetime", "交易日期", "trade_date"]:
+            for col in ["时间", "day", "datetime", "交易日期", "trade_date"]:
                 if col in df.columns:
                     df = df.rename(columns={col: "date"})
                     break
@@ -264,9 +262,10 @@ class BacktestEngine:
             return df
         
         start_date = pd.to_datetime(self.config.start_date)
-        end_date = pd.to_datetime(self.config.end_date)
+        end_date = pd.to_datetime(self.config.end_date) + pd.Timedelta(days=1)
         
-        mask = (df["date"] >= start_date) & (df["date"] <= end_date)
+        # 结束日期包含全天，保留结束日的分钟 K 线。
+        mask = (df["date"] >= start_date) & (df["date"] < end_date)
         return df[mask].copy()
     
     def _calculate_indicators(self, df: pd.DataFrame) -> None:

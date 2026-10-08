@@ -10,9 +10,11 @@
 
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 from http.client import RemoteDisconnected
 from urllib.error import URLError
+from zoneinfo import ZoneInfo
 
 import akshare as ak
 import pandas as pd
@@ -72,6 +74,7 @@ class AkShareClient:
         ttl: Optional[int] = None,
         timeout: Optional[float] = None,
         enable_range_completion: bool = True,
+        use_disk_cache: bool = True,
         **kwargs: Any,
     ) -> Optional[pd.DataFrame]:
         """调用 AkShare 函数并处理缓存和错误。
@@ -90,6 +93,7 @@ class AkShareClient:
             ttl: 内存缓存 TTL（秒），如果为 None 使用配置值
             timeout: 请求超时时间（秒），如果为 None 使用 AkShare 默认值
             enable_range_completion: 是否启用范围补全功能（默认 True）
+            use_disk_cache: 是否读写磁盘缓存；分钟行情快照仅使用内存 TTL
             **kwargs: 传递给函数的关键字参数
 
         Returns:
@@ -101,7 +105,21 @@ class AkShareClient:
             
         需求: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 3.5
         """
-        # 生成缓存键
+        # 范围补全以日为单位；分钟行情不能按天补全或永久缓存。
+        date_params = (kwargs.get('start_date'), kwargs.get('end_date'))
+        has_date_params = all(
+            isinstance(value, str) and len(value) == 8 and value.isdigit()
+            for value in date_params
+        )
+        use_range_completion = enable_range_completion and use_disk_cache and has_date_params
+        if use_range_completion:
+            today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+            kwargs['end_date'] = min(kwargs['end_date'], today)
+            if kwargs['start_date'] > kwargs['end_date']:
+                return pd.DataFrame()
+
+        # 自动键包含请求区间，内存命中可直接复用；自定义键仍需检查覆盖范围。
+        automatic_cache_key = cache_key is None
         if cache_key is None:
             cache_key = self._generate_cache_key(func, args, kwargs)
 
@@ -113,11 +131,13 @@ class AkShareClient:
         if timeout is not None:
             kwargs['timeout'] = timeout
 
-        # 检查是否启用范围补全且有日期参数
-        has_date_params = 'start_date' in kwargs and 'end_date' in kwargs
-        use_range_completion = enable_range_completion and has_date_params
-
         if use_range_completion:
+            cache = CacheKey.init(cache_key, ttl=ttl, maxsize=self.settings.cache_max_size)
+            if automatic_cache_key:
+                cached_data = cache.cache1.get(cache_key)
+                if cached_data is not None:
+                    return cached_data.copy()
+
             # 使用智能范围补全逻辑
             # 需求 6.1: 记录范围补全启用日志
             logger.debug(
@@ -129,7 +149,8 @@ class AkShareClient:
             range_check = self._check_cache_range(
                 cache_key,
                 kwargs['start_date'],
-                kwargs['end_date']
+                kwargs['end_date'],
+                refresh_last_bar=self._infer_data_type(func.__name__) == 'price',
             )
 
             status = range_check['status']
@@ -141,6 +162,7 @@ class AkShareClient:
                     "范围完全命中，直接返回缓存数据: key=%s, 行数=%d",
                     cache_key, len(range_check['cached_data'])
                 )
+                cache.cache1[cache_key] = range_check['cached_data'].copy()
                 return range_check['cached_data']
             
             # 需求 2.5: 缓存不存在或部分命中，需要补全
@@ -191,7 +213,7 @@ class AkShareClient:
                                 cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
                             )
                             # 只设置内存缓存，不重复写入 SQLite
-                            cache.cache1[cache_key] = result
+                            cache.cache1[cache_key] = result.copy()
                             logger.debug("缓存已设置（仅内存）: %s (ttl=%ds)", cache_key, ttl)
                         except Exception as mem_cache_error:
                             # 需求 5.3, 6.4: 内存缓存失败不影响数据返回
@@ -228,6 +250,10 @@ class AkShareClient:
                                    if k not in ['start_date', 'end_date']}
 
                     new_dfs = self._fetch_missing_ranges(func, missing_ranges, **fetch_kwargs)
+
+                    # 请求失败或无新数据时保留原缓存的更新时间，避免把旧行情标成刚刷新。
+                    if not new_dfs:
+                        return cached_df.copy()
 
                     # 需求 3.4, 3.5: 合并缓存数据和新数据
                     merged_df = self._merge_dataframes(cached_df, new_dfs, missing_ranges)
@@ -269,7 +295,7 @@ class AkShareClient:
                             cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
                         )
                         # 只设置内存缓存，不重复写入 SQLite
-                        cache.cache1[cache_key] = merged_df
+                        cache.cache1[cache_key] = merged_df.copy()
                         logger.debug("缓存已设置（仅内存）: %s (ttl=%ds)", cache_key, ttl)
                     except Exception as mem_cache_error:
                         # 需求 5.3, 6.4: 内存缓存失败不影响数据返回
@@ -309,17 +335,20 @@ class AkShareClient:
         )
 
         # 尝试从缓存获取
-        cached_data = cache.get()
+        cached_data = cache.get() if use_disk_cache else cache.cache1.get(cache_key)
         if cached_data is not None:
             logger.debug(f"缓存命中: {cache_key}")
-            return cached_data
+            return cached_data.copy()
 
         # 缓存未命中，调用 AkShare 函数
         result = self._fetch_data_with_retry(func, args, kwargs)
         
         if result is not None:
             # 存入缓存
-            cache.set(result)
+            if use_disk_cache:
+                cache.set(result.copy())
+            else:
+                cache.cache1[cache_key] = result.copy()
             logger.debug(f"数据已缓存: {cache_key}")
         
         return result
@@ -847,7 +876,7 @@ class AkShareClient:
                 # 需求 5.2: 按日期列排序
                 logger.debug("按日期排序数据")
                 try:
-                    merged = merged.sort_values(by=date_col, ascending=True)
+                    merged = merged.sort_values(by=date_col, ascending=True, kind="stable")
                 except Exception as e:
                     # 需求 5.3, 6.4: 记录排序错误但继续处理
                     logger.warning("数据排序失败: %s, 继续处理", e)
@@ -909,7 +938,8 @@ class AkShareClient:
         self,
         cache_key: str,
         requested_start: str,
-        requested_end: str
+        requested_end: str,
+        refresh_last_bar: bool = False,
     ) -> dict:
         """检查缓存范围并确定需要补全的数据段。
 
@@ -920,6 +950,7 @@ class AkShareClient:
             cache_key: 缓存键
             requested_start: 请求的起始日期 (YYYYMMDD 格式)
             requested_end: 请求的结束日期 (YYYYMMDD 格式)
+            refresh_last_bar: 内存 TTL 到期后重取尾部 K 线，覆盖盘中值和最终收盘值
 
         返回:
             包含以下键的字典:
@@ -932,7 +963,6 @@ class AkShareClient:
 
         需求: 2.1, 2.2, 2.3, 2.4, 2.5
         """
-        from datetime import datetime, timedelta
         from ..cache.serialization import deserialize_dataframe
 
         # 解析请求的日期范围 (YYYYMMDD -> datetime)
@@ -1044,10 +1074,11 @@ class AkShareClient:
             )
 
         # 需求 2.3: 请求的结束日期晚于缓存结束日期
-        if req_end > cached_end:
-            # 需要补全最新数据
-            # 起始日期是缓存结束日期的后一天
-            after_start = (cached_end + timedelta(days=1)).strftime('%Y%m%d')
+        if req_end > cached_end or (refresh_last_bar and req_end == cached_end):
+            # 价格数据重叠获取最后一根 K 线，合并时保留新值。
+            # 只从次日补全会让当天首次缓存的盘中价格永久保留下来。
+            after_date = cached_end if refresh_last_bar else cached_end + timedelta(days=1)
+            after_start = max(req_start, after_date).strftime('%Y%m%d')
             missing_ranges.append({
                 'start': after_start,
                 'end': requested_end,
@@ -1100,7 +1131,7 @@ class AkShareClient:
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
-        """获取 A 股历史行情数据，失败时依次尝试腾讯和新浪备用接口。
+        """获取 A 股日、周、月行情；各数据源统一获取日线后聚合。
 
         Args:
             symbol: 股票代码
@@ -1114,55 +1145,150 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
-        # 在返回缓存的价格数据前检查新分红（需求 4.1, 4.3）
-        # 仅对复权价格数据（qfq/hfq）进行检查，因为原始价格不受影响
+        if period not in {"daily", "weekly", "monthly"}:
+            raise ValidationException("period", "仅支持 daily、weekly、monthly；分钟行情请使用分钟接口")
+
+        # 从周期起点加载，避免第一根周/月 K 线缺少开盘价或成交量。
+        fetch_start = pd.Timestamp(start_date)
+        if period != "daily":
+            frequency = "W-SUN" if period == "weekly" else "M"
+            fetch_start = fetch_start.to_period(frequency).start_time
+
         if adjust in ("qfq", "hfq"):
             self._check_dividend_invalidation(symbol)
-        
-        # 优先使用腾讯接口
-        try:
-            tx_symbol = f"{market.lower()}{symbol}"
-            logger.info(f"使用腾讯接口获取历史行情: {tx_symbol}")
-            result = self.call(
-                ak.stock_zh_a_hist_tx,
-                symbol=tx_symbol,
-                start_date=start_date,
-                end_date=end_date,
-                adjust=adjust,
-                ttl=ttl or 3600,
-            )
-            if result is not None and not result.empty:
-                return result
-        except Exception as tx_error:
-            logger.warning(f"腾讯接口失败: {tx_error}")
 
-        # 备选新浪接口
-        try:
-            sina_symbol = f"{market.lower()}{symbol}"
-            logger.info(f"使用新浪接口获取历史行情: {sina_symbol}")
-            result = self.call(
-                ak.stock_zh_a_daily,
-                symbol=sina_symbol,
-                start_date=start_date,
-                end_date=end_date,
-                adjust=adjust,
-                ttl=ttl or 3600,
-            )
-            if result is not None and not result.empty:
-                return result
-        except Exception as sina_error:
-            logger.warning(f"新浪接口失败: {sina_error}")
-
-        # 兜底东财接口
-        return self.call(
-            ak.stock_zh_a_hist,
-            symbol=symbol,
-            period=period,
-            start_date=start_date,
-            end_date=end_date,
-            adjust=adjust,
-            ttl=ttl or 3600,
+        full_symbol = f"{market.lower()}{symbol}"
+        sources = (
+            (ak.stock_zh_a_hist_tx, {"symbol": full_symbol}),
+            (ak.stock_zh_a_daily, {"symbol": full_symbol}),
+            (ak.stock_zh_a_hist, {"symbol": symbol, "period": "daily"}),
         )
+        last_error = None
+        for func, source_kwargs in sources:
+            try:
+                result = self.call(
+                    func,
+                    **source_kwargs,
+                    start_date=fetch_start.strftime("%Y%m%d"),
+                    end_date=end_date,
+                    adjust=adjust,
+                    ttl=ttl if ttl is not None else 3600,
+                )
+                if result is not None and not result.empty:
+                    result = self._resample_daily_bars(result, period, start_date, end_date)
+                    if not result.empty:
+                        return result
+            except Exception as error:
+                last_error = error
+                logger.warning("%s 历史行情获取失败: %s", func.__name__, error)
+
+        if last_error is not None:
+            raise APIException("AkShare.stock_zh_a_hist", str(last_error)) from last_error
+        return None
+
+    @staticmethod
+    def _resample_daily_bars(
+        df: pd.DataFrame, period: str, start_date: str, end_date: str
+    ) -> pd.DataFrame:
+        """按实际交易日期聚合 OHLCV，日期使用该周期最后一个已有交易日。"""
+        date_col = next((col for col in ("date", "日期") if col in df.columns), None)
+        if date_col is None:
+            raise DataParsingException("AkShare.history", "行情缺少日期列")
+
+        result = df.copy()
+        result[date_col] = pd.to_datetime(result[date_col], errors="coerce")
+        start = pd.Timestamp(start_date)
+        end = pd.Timestamp(end_date)
+        frequency = "W-SUN" if period == "weekly" else "M"
+        fetch_start = start if period == "daily" else start.to_period(frequency).start_time
+        result = result[result[date_col].between(fetch_start, end)]
+        result = result.drop_duplicates(date_col, keep="last").sort_values(date_col)
+
+        if period != "daily" and not result.empty:
+            aggregations: dict[str, Any] = {date_col: "last"}
+            for aliases, operation in (
+                (("open", "开盘"), "first"),
+                (("close", "收盘"), "last"),
+                (("high", "最高"), "max"),
+                (("low", "最低"), "min"),
+            ):
+                column = next((col for col in aliases if col in result.columns), None)
+                if column is None:
+                    raise DataParsingException("AkShare.history", f"行情缺少 {aliases[0]} 列")
+                result[column] = pd.to_numeric(result[column], errors="coerce")
+                aggregations[column] = operation
+            for column in ("volume", "成交量", "amount", "成交额"):
+                if column in result.columns:
+                    result[column] = pd.to_numeric(result[column], errors="coerce")
+                    aggregations[column] = lambda values: values.sum(min_count=1)
+
+            result = result.groupby(result[date_col].dt.to_period(frequency)).agg(aggregations)
+
+        return result[result[date_col].between(start, end)].reset_index(drop=True)
+
+    def stock_zh_a_hist_min(
+        self,
+        symbol: str,
+        market: str = "sz",
+        period: str = "5",
+        start_date: str = "20200101",
+        end_date: str = "22220101",
+        adjust: str = "",
+        ttl: int = 300,
+    ) -> Optional[pd.DataFrame]:
+        """获取指定区间的分钟行情，优先新浪、备用东财，不回退到日线。"""
+        if period not in {"1", "5", "15", "30", "60"}:
+            raise ValidationException("period", "分钟周期仅支持 1、5、15、30、60")
+        if market not in {"sh", "sz"}:
+            raise ValidationException("market", "分钟行情仅支持 sh、sz")
+        if adjust not in {"", "qfq", "hfq"} or (period == "1" and adjust):
+            raise ValidationException("adjust", "仅支持不复权、qfq、hfq；1 分钟行情仅支持不复权")
+
+        start = pd.Timestamp(start_date)
+        end = pd.Timestamp(end_date)
+        if len(end_date) in (8, 10):
+            end += pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        now = pd.Timestamp(datetime.now(ZoneInfo("Asia/Shanghai")).replace(tzinfo=None))
+        end = min(end, now)
+        if start > end:
+            return pd.DataFrame()
+
+        sources = (
+            (ak.stock_zh_a_minute, {"symbol": f"{market.lower()}{symbol}"}),
+            (ak.stock_zh_a_hist_min_em, {
+                "symbol": symbol,
+                "start_date": start.strftime("%Y-%m-%d %H:%M:%S"),
+                "end_date": end.strftime("%Y-%m-%d %H:%M:%S"),
+            }),
+        )
+        last_error = None
+        for func, source_kwargs in sources:
+            try:
+                result = self.call(
+                    func, **source_kwargs, period=period, adjust=adjust, ttl=ttl,
+                    enable_range_completion=False, use_disk_cache=False,
+                )
+                if result is None or result.empty:
+                    continue
+                result = result.rename(columns={
+                    "day": "date", "时间": "date", "日期": "date",
+                    "开盘": "open", "收盘": "close", "最高": "high", "最低": "low",
+                    "成交量": "volume", "成交额": "amount",
+                }).copy()
+                result["date"] = pd.to_datetime(result["date"], errors="coerce")
+                for column in ("open", "close", "high", "low", "volume", "amount"):
+                    if column in result.columns:
+                        result[column] = pd.to_numeric(result[column], errors="coerce")
+                result = result[result["date"].between(start, end)]
+                if not result.empty:
+                    return result.drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
+            except Exception as error:
+                last_error = error
+                logger.warning("%s 分钟行情获取失败: %s", func.__name__, error)
+
+        if last_error is not None:
+            raise APIException("AkShare.stock_zh_a_hist_min", str(last_error)) from last_error
+        return None
 
     def stock_hk_hist(
         self,
@@ -1195,6 +1321,9 @@ class AkShareClient:
                 end_date=end_date,
                 adjust=adjust,
                 ttl=ttl or 3600,  # 1 小时
+                # 周/月 K 线在周期内会改变日期，整份快照刷新可避免合并出重复周期。
+                enable_range_completion=period == "daily",
+                use_disk_cache=period == "daily",
             )
         except APIException as e:
             # 只在 daily 周期时尝试新浪备用接口（新浪接口不支持 weekly/monthly）
@@ -1207,6 +1336,7 @@ class AkShareClient:
                         symbol=symbol,
                         adjust=adjust,
                         ttl=ttl or 3600,
+                        use_disk_cache=False,
                     )
                     if result is not None and not result.empty:
                         logger.info(f"新浪港股备用接口成功获取数据: {symbol}")
