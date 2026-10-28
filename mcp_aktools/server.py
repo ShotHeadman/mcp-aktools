@@ -39,8 +39,9 @@ def register_tools(mcp: FastMCP) -> None:
     from .tools import market as market_tools
     from .tools import news as news_tools
     from .tools import stock as stock_tools
+    from .tools import wyckoff as wyckoff_tools
 
-    logger.info("Registering tools from modules: stock, market, news")
+    logger.info("Registering tools from modules: stock, market, news, wyckoff")
 
     @mcp.tool(
         title="查找股票代码",
@@ -181,7 +182,7 @@ def register_tools(mcp: FastMCP) -> None:
             90, description="回溯K线根数，默认90根(范围30-250)", strict=False
         ),
     ):
-        return stock_tools.analyze_wyckoff_structure(
+        return wyckoff_tools.analyze_wyckoff_structure(
             symbol=symbol, market=market, period=period, lookback=lookback
         )
 
@@ -198,7 +199,7 @@ def register_tools(mcp: FastMCP) -> None:
         ),
         bins: int = Field(20, description="价格分箱数量，默认20", strict=False),
     ):
-        return stock_tools.stock_volume_profile(
+        return wyckoff_tools.stock_volume_profile(
             symbol=symbol, market=market, lookback=lookback, bins=bins
         )
 

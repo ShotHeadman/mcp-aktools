@@ -230,6 +230,7 @@ def test_sqlite_cleanup_redundant_entries_merges_fragments_and_removes_transient
 def test_new_wyckoff_and_volume_profile_tools(monkeypatch):
     import numpy as np
     from mcp_aktools.tools import stock as stock_tools
+    from mcp_aktools.tools import wyckoff as wyckoff_tools
 
     dates = pd.date_range("2025-01-01", periods=60, freq="B")
     np.random.seed(42)
@@ -275,6 +276,20 @@ def test_new_wyckoff_and_volume_profile_tools(monkeypatch):
     assert "poc_price" in vp_report
     assert "value_area_70pct" in vp_report
     assert "top_volume_nodes" in vp_report
+
+    # 直接测试 wyckoff 独立模块及算法辅助函数
+    direct_wyckoff = wyckoff_tools.analyze_wyckoff_structure(
+        symbol="600519", market="sh", period="daily", lookback=50
+    )
+    assert isinstance(direct_wyckoff, dict)
+    assert direct_wyckoff["current_price"] == wyckoff_report["current_price"]
+
+    highs_s = pd.Series(highs)
+    lows_s = pd.Series(lows)
+    dates_s = pd.Series(dates.strftime("%Y-%m-%d"))
+    shs, sls = wyckoff_tools.find_swing_levels(highs_s, lows_s, dates_s, w=3)
+    assert isinstance(shs, list)
+    assert isinstance(sls, list)
 
 
 def test_index_zh_a_hist_supports_weekly_resampling(monkeypatch):

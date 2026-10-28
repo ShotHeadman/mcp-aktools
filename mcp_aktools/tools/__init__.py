@@ -22,6 +22,10 @@ from .stock import (
     stock_info,
     stock_prices,
 )
+from .wyckoff import (
+    analyze_wyckoff_structure,
+    stock_volume_profile,
+)
 
 __all__ = [
     # 股票工具
@@ -31,6 +35,9 @@ __all__ = [
     "stock_indicators_a",
     "stock_indicators_hk",
     "stock_indicators_us",
+    # 威科夫与量价结构工具
+    "analyze_wyckoff_structure",
+    "stock_volume_profile",
     # 市场数据工具
     "get_current_time",
     "stock_zt_pool_em",
