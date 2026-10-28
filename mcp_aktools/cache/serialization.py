@@ -54,11 +54,23 @@ def serialize_dataframe(df: pd.DataFrame) -> bytes:
         buffer = io.BytesIO()
         df.to_parquet(buffer, engine='pyarrow', compression='snappy')
         return buffer.getvalue()
-    except ImportError as e:
+    except ImportError:
         logger.warning("pyarrow 不可用，回退到 pickle 格式")
     except Exception as e:
-        # 如果是 pyarrow 兼容性问题，回退到 pickle
-        logger.warning("Parquet 序列化失败 (%s)，回退到 pickle 格式", str(e))
+        # 尝试将含混合类型（如 datetime.date + int/str 或 bool + str）的 object 列统一转为字符串后再写 Parquet
+        try:
+            normalized_df = df.copy()
+            for col in normalized_df.select_dtypes(include=["object"]).columns:
+                normalized_df[col] = normalized_df[col].map(
+                    lambda v: v.isoformat()
+                    if hasattr(v, "isoformat")
+                    else (str(v) if pd.notna(v) else None)
+                )
+            buffer = io.BytesIO()
+            normalized_df.to_parquet(buffer, engine='pyarrow', compression='snappy')
+            return buffer.getvalue()
+        except Exception:
+            logger.warning("Parquet 序列化失败 (%s)，回退到 pickle 格式", str(e))
     
     # 回退到 pickle 格式
     try:

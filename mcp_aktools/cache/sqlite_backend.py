@@ -455,6 +455,19 @@ class SQLiteCacheBackend:
                 logger.error("根据前缀删除缓存条目失败: %s", e, exc_info=True)
                 return 0
     
+    @staticmethod
+    def _symbol_variants(symbol: str) -> Tuple[str, ...]:
+        """生成股票代码常见变体（如 600519, sh600519, sz600519）。"""
+        raw = str(symbol).strip()
+        lower = raw.lower()
+        if len(lower) == 8 and lower[:2] in ("sh", "sz", "bj") and lower[2:].isdigit():
+            base = lower[2:]
+        else:
+            base = raw
+        if base.isdigit() and len(base) == 6:
+            return (base, f"sh{base}", f"sz{base}", f"bj{base}", f"SH{base}", f"SZ{base}")
+        return (raw, lower, raw.upper())
+
     def delete_by_symbol(self, symbol: str) -> int:
         """根据股票代码删除缓存数据。
         
@@ -464,13 +477,21 @@ class SQLiteCacheBackend:
         返回:
             删除的条目数量。
         """
+        variants = self._symbol_variants(symbol)
+        placeholders = ",".join("?" for _ in variants)
+        base_code = variants[0]
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "DELETE FROM cache_entries WHERE symbol = ?",
-                    (symbol,)
+                    f"""
+                    DELETE FROM cache_entries
+                    WHERE symbol IN ({placeholders})
+                       OR cache_key LIKE ?
+                       OR cache_key LIKE ?
+                    """,
+                    (*variants, f"%{base_code}%", f"%{symbol}%"),
                 )
                 conn.commit()
                 deleted_count = cursor.rowcount
@@ -498,20 +519,24 @@ class SQLiteCacheBackend:
         返回:
             删除的条目数量。
         """
+        variants = self._symbol_variants(symbol)
+        placeholders = ",".join("?" for _ in variants)
+        base_code = variants[0]
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                # 删除缓存键中包含 adjust='qfq' 或 adjust='hfq' 的条目
-                # 缓存键格式类似: stock_zh_a_hist-('000001',)-[('adjust', 'qfq'), ...]
-                cursor.execute("""
+                cursor.execute(
+                    f"""
                     DELETE FROM cache_entries 
-                    WHERE symbol = ? 
+                    WHERE (symbol IN ({placeholders}) OR cache_key LIKE ?)
                     AND (
                         cache_key LIKE '%adjust%qfq%' 
                         OR cache_key LIKE '%adjust%hfq%'
                     )
-                """, (symbol,))
+                    """,
+                    (*variants, f"%{base_code}%"),
+                )
                 conn.commit()
                 deleted_count = cursor.rowcount
                 if deleted_count > 0:
@@ -526,6 +551,245 @@ class SQLiteCacheBackend:
                 conn.rollback()
                 logger.error("根据股票代码删除复权价格缓存条目失败: %s", e, exc_info=True)
                 return 0
+
+    def cleanup_redundant_entries(self, vacuum: bool = True) -> Dict[str, Any]:
+        """清理并合并数据库中的冗余/过期/碎片化缓存数据。
+
+        处理内容：
+        1. 删除瞬态高频不应落盘的条目（分笔 tick、分钟行情、全市场实时行情快照、临时波浪分析等）。
+        2. 合并或清理旧版因 cache_key 包含 start_date/end_date 产生的重复历史行情碎片，
+           将其归并到不含起止日期的标准范围缓存键中。
+        3. 清理已过期的非价格类缓存。
+        4. 执行 VACUUM 收缩数据库文件体积。
+        """
+        import os
+        import re
+        from .serialization import deserialize_dataframe, serialize_dataframe
+
+        size_before = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
+        transient_deleted = 0
+        fragment_deleted = 0
+        consolidated_keys = 0
+        expired_deleted = 0
+
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 1. 删除瞬态/临时条目
+            transient_prefixes = (
+                "stock_zh_a_tick_tx_js%",
+                "stock_zh_a_minute%",
+                "stock_zh_a_hist_min_em%",
+                "stock_zh_a_spot%",
+                "fund_etf_spot_%",
+                "wave_analysis_%",
+            )
+            for prefix in transient_prefixes:
+                cursor.execute("DELETE FROM cache_entries WHERE cache_key LIKE ?", (prefix,))
+                transient_deleted += cursor.rowcount
+
+            # 2. 查找包含 start_date 或 end_date 的碎片化价格缓存并归并
+            cursor.execute(
+                """
+                SELECT cache_key, data, data_type, symbol
+                FROM cache_entries
+                WHERE cache_key LIKE '%''start_date''%'
+                   OR cache_key LIKE '%''end_date''%'
+                """
+            )
+            fragment_rows = cursor.fetchall()
+            grouped_fragments: Dict[str, list] = {}
+
+            date_tuple_pattern = re.compile(
+                r"\('(?:start_date|end_date|timeout)',\s*[^)]+\)(?:,\s*)?"
+            )
+
+            for old_key, blob, dtype, sym in fragment_rows:
+                # 规范化键名：移除 start_date, end_date, timeout
+                canonical_key = date_tuple_pattern.sub("", old_key)
+                canonical_key = re.sub(r",\s*\]", "]", canonical_key)
+                grouped_fragments.setdefault(canonical_key, []).append((old_key, blob, dtype, sym))
+
+            for canonical_key, items in grouped_fragments.items():
+                dfs = []
+                inferred_sym = None
+                for _, blob, _, sym in items:
+                    if sym and not inferred_sym:
+                        inferred_sym = sym
+                    try:
+                        df = deserialize_dataframe(blob)
+                        if df is not None and not df.empty:
+                            dfs.append(df)
+                    except Exception:
+                        pass
+
+                # 如果 canonical_key 已经存在，也纳入合并
+                cursor.execute(
+                    "SELECT data, symbol FROM cache_entries WHERE cache_key = ?",
+                    (canonical_key,),
+                )
+                existing_row = cursor.fetchone()
+                if existing_row:
+                    try:
+                        existing_df = deserialize_dataframe(existing_row[0])
+                        if existing_df is not None and not existing_df.empty:
+                            dfs.append(existing_df)
+                    except Exception:
+                        pass
+                    if existing_row[1] and not inferred_sym:
+                        inferred_sym = existing_row[1]
+
+                # 删除所有旧碎片
+                for old_key, _, _, _ in items:
+                    if old_key != canonical_key:
+                        cursor.execute("DELETE FROM cache_entries WHERE cache_key = ?", (old_key,))
+                        fragment_deleted += cursor.rowcount
+
+                if dfs:
+                    try:
+                        merged = pd.concat(dfs, ignore_index=True)
+                        date_col = next(
+                            (c for c in ("日期", "date", "时间", "datetime", "交易日期", "trade_date") if c in merged.columns),
+                            None,
+                        )
+                        if date_col:
+                            merged["_sort_dt"] = pd.to_datetime(merged[date_col], errors="coerce")
+                            merged = (
+                                merged.dropna(subset=["_sort_dt"])
+                                .sort_values("_sort_dt", kind="stable")
+                                .drop_duplicates(subset=["_sort_dt"], keep="last")
+                                .drop(columns=["_sort_dt"])
+                                .reset_index(drop=True)
+                            )
+                        start_dt, end_dt = self.extract_date_range(merged)
+                        if not inferred_sym:
+                            m = re.search(r"\('(?:symbol|stock)',\s*'([^']+)'\)", canonical_key)
+                            if m:
+                                raw_s = m.group(1)
+                                inferred_sym = raw_s[2:] if len(raw_s) == 8 and raw_s[:2].lower() in ("sh", "sz", "bj") else raw_s
+                        serialized = serialize_dataframe(merged)
+                        now_iso = datetime.now().isoformat()
+                        cursor.execute(
+                            """
+                            INSERT INTO cache_entries (
+                                cache_key, data, created_at, updated_at,
+                                data_type, symbol, start_date, end_date
+                            )
+                            VALUES (?, ?, ?, ?, 'price', ?, ?, ?)
+                            ON CONFLICT(cache_key) DO UPDATE SET
+                                data = excluded.data,
+                                updated_at = excluded.updated_at,
+                                data_type = 'price',
+                                symbol = excluded.symbol,
+                                start_date = excluded.start_date,
+                                end_date = excluded.end_date
+                            """,
+                            (
+                                canonical_key,
+                                serialized,
+                                now_iso,
+                                now_iso,
+                                inferred_sym,
+                                start_dt.date().isoformat() if start_dt else None,
+                                end_dt.date().isoformat() if end_dt else None,
+                            ),
+                        )
+                        consolidated_keys += 1
+                    except Exception as merge_err:
+                        logger.warning("归并缓存键 %s 失败: %s", canonical_key, merge_err)
+
+            # 3. 清理无 data_type 的陈旧非价格缓存（如旧新闻、旧资金流等超过24小时的条目）
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            cursor.execute(
+                """
+                DELETE FROM cache_entries
+                WHERE (data_type IS NULL OR data_type NOT IN ('price', 'dividend'))
+                  AND updated_at < ?
+                """,
+                (cutoff,),
+            )
+            expired_deleted += cursor.rowcount
+
+            # 4. 补全历史条目的 symbol/data_type 元数据，并将旧版 pickle 序列化条目升级为高压缩 Parquet，
+            #    同时裁剪新浪全量接口产生但超出近 5 年(1250个交易日)的超长历史冗余数据
+            cursor.execute("SELECT cache_key, data, data_type, symbol FROM cache_entries")
+            all_rows = cursor.fetchall()
+            for c_key, blob, d_type, sym in all_rows:
+                new_sym = sym
+                if not new_sym:
+                    m = re.search(r"\('(?:symbol|stock)',\s*'([^']+)'\)", c_key)
+                    if m:
+                        raw_s = m.group(1)
+                        new_sym = (
+                            raw_s[2:]
+                            if len(raw_s) == 8 and raw_s[:2].lower() in ("sh", "sz", "bj")
+                            else raw_s
+                        )
+                new_dtype = d_type
+                if not new_dtype:
+                    if any(k in c_key for k in ("hist", "daily", "price", "index")):
+                        new_dtype = "price"
+                    elif "dividend" in c_key or "fhps" in c_key:
+                        new_dtype = "dividend"
+                    else:
+                        new_dtype = "info"
+
+                is_pickle = bool(blob and bytes(blob[:1]) == b"\x80")
+                is_oversized_daily = c_key.startswith("stock_zh_a_daily-") and len(blob) > 80_000
+
+                if is_pickle or is_oversized_daily:
+                    try:
+                        df = deserialize_dataframe(blob)
+                        if df is not None and not df.empty:
+                            if is_oversized_daily and len(df) > 1250:
+                                df = df.tail(1250).reset_index(drop=True)
+                            new_blob = serialize_dataframe(df)
+                            start_dt, end_dt = self.extract_date_range(df)
+                            cursor.execute(
+                                """
+                                UPDATE cache_entries
+                                SET data = ?, symbol = ?, data_type = ?, start_date = ?, end_date = ?
+                                WHERE cache_key = ?
+                                """,
+                                (
+                                    new_blob,
+                                    new_sym,
+                                    new_dtype,
+                                    start_dt.date().isoformat() if start_dt else None,
+                                    end_dt.date().isoformat() if end_dt else None,
+                                    c_key,
+                                ),
+                            )
+                            continue
+                    except Exception:
+                        pass
+
+                if new_sym != sym or new_dtype != d_type:
+                    cursor.execute(
+                        "UPDATE cache_entries SET symbol = ?, data_type = ? WHERE cache_key = ?",
+                        (new_sym, new_dtype, c_key),
+                    )
+
+            conn.commit()
+
+            if vacuum:
+                # SQLite VACUUM 需要在无未决事务时执行
+                conn.execute("VACUUM")
+
+            cursor.execute("SELECT COUNT(*) FROM cache_entries")
+            remaining_count = cursor.fetchone()[0]
+
+        size_after = os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
+        return {
+            "transient_deleted": transient_deleted,
+            "fragment_deleted": fragment_deleted,
+            "consolidated_keys": consolidated_keys,
+            "expired_deleted": expired_deleted,
+            "remaining_entries": remaining_count,
+            "size_before_bytes": size_before,
+            "size_after_bytes": size_after,
+        }
     
     def clear(self) -> int:
         """清除所有缓存数据。

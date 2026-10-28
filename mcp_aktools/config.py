@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     rate_limit_calls: int = 10
     rate_limit_period: int = 1
 
-    # 重试配置
+    # 重试与数据源熔断配置
     retry_max_attempts: int = 3
     retry_backoff_factor: float = 2.0
     retry_max_delay: int = 60
+    eastmoney_cooldown_seconds: int = 300
+    eastmoney_max_retries: int = 1
 
     # 交易规则配置
     trading_rule_file: Optional[str] = None
@@ -76,26 +78,25 @@ class Settings(BaseSettings):
         """Get the database file path.
         
         If database_url is set, returns that path.
-        Otherwise, returns a default path in the user's cache directory.
+        Otherwise, prefers the project data/stock_data.db directory if present,
+        or falls back to the user's cache directory.
         
         Returns:
             str: The database file path
         """
         if self.database_url:
             return self.database_url
+
+        project_data_dir = Path(__file__).resolve().parent.parent / "data"
+        if project_data_dir.exists() and os.access(project_data_dir, os.W_OK):
+            return str(project_data_dir / "stock_data.db")
         
-        # Use user's cache directory as default
-        # On Windows: C:\\Users\\<user>\\AppData\\Local\\mcp-aktools\\cache
-        # On macOS: ~/Library/Caches/mcp-aktools
-        # On Linux: ~/.cache/mcp-aktools
+        # Use user's cache directory as fallback
         if os.name == "nt":
-            # Windows
             cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         elif os.name == "posix" and os.uname().sysname == "Darwin":
-            # macOS
             cache_dir = Path.home() / "Library" / "Caches"
         else:
-            # Linux and other Unix-like systems
             cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
         
         db_dir = cache_dir / "mcp-aktools"

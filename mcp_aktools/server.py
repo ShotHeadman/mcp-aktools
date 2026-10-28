@@ -155,6 +155,71 @@ def register_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(
+        name="stock_quote_realtime",
+        title="个股/批量实时五档盘口快照",
+        description="基于腾讯高速行情接口获取单只或多只A股/ETF的毫秒级实时快照，包含最新价、涨跌幅、五档买卖盘口、外盘/内盘、换手率、量比、PE(TTM)、PB、总市值与流通市值。完全不依赖东方财富，极速防封",
+    )
+    def stock_quote_realtime(
+        symbols: str = Field(
+            description="股票或ETF代码，支持逗号分隔批量查询，如 '600519,000001,510300'"
+        ),
+    ):
+        return stock_tools.stock_quote_realtime(symbols=symbols)
+
+    @mcp.tool(
+        name="analyze_wyckoff_structure",
+        title="现代威科夫与聪明钱(SMC)量价结构分析",
+        description="结合现代威科夫(Modern Wyckoff)与聪明钱(SMC)体系，对目标股票进行深度量价与市场结构诊断：包含Effort vs Result(放量滞涨/缩量企稳)、Spring/Upthrust流动性掠夺(Sweep)、MSS结构转变、FVG失衡缺口、OB订单块及筹码POC/VAH/VAL位置",
+    )
+    def analyze_wyckoff_structure(
+        symbol: str = field_symbol,
+        market: str = field_market,
+        period: str = Field(
+            "daily", description="分析周期: daily(日线)、weekly(周线)、monthly(月线)"
+        ),
+        lookback: int = Field(
+            90, description="回溯K线根数，默认90根(范围30-250)", strict=False
+        ),
+    ):
+        return stock_tools.analyze_wyckoff_structure(
+            symbol=symbol, market=market, period=period, lookback=lookback
+        )
+
+    @mcp.tool(
+        name="stock_volume_profile",
+        title="筹码分布与成交量分布(Volume Profile)",
+        description="计算股票在指定回溯周期内的成交量分布(Volume Profile / 筹码峰结构)，识别控制点(POC)、70%价值区上下沿(VAH/VAL)、高量节点(HVN支撑阻力)与低量真空区(LVN)及获利盘比例",
+    )
+    def stock_volume_profile(
+        symbol: str = field_symbol,
+        market: str = field_market,
+        lookback: int = Field(
+            90, description="统计回溯交易日数量，默认90天(范围20-250)", strict=False
+        ),
+        bins: int = Field(20, description="价格分箱数量，默认20", strict=False),
+    ):
+        return stock_tools.stock_volume_profile(
+            symbol=symbol, market=market, lookback=lookback, bins=bins
+        )
+
+    @mcp.tool(
+        name="stock_valuation_dividend",
+        title="历史估值分位与分红派息汇总",
+        description="获取股票的历史估值(PE/PB/市值)当前所处百分位水平，以及历年分红派息记录（优先使用百度股市通与新浪财经，无需访问东方财富）",
+    )
+    def stock_valuation_dividend(
+        symbol: str = field_symbol,
+        market: str = field_market,
+        period: str = Field(
+            "近三年",
+            description="估值分位统计周期: 近一年, 近三年, 近五年, 近十年, 全部",
+        ),
+    ):
+        return stock_tools.stock_valuation_dividend(
+            symbol=symbol, market=market, period=period
+        )
+
+    @mcp.tool(
         title="获取当前时间及A股交易日信息",
         description="获取当前系统时间及A股交易日信息，建议在调用其他需要日期参数的工具前使用该工具",
     )
@@ -238,13 +303,36 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         title="个股资金流向历史",
-        description="获取单个股票的历史资金流向数据，包括主力净流入、超大单净流入、大单净流入、中单净流入、小单净流入等信息",
+        description="获取单个股票的历史资金流向数据，包括主力净流入、超大单净流入、大单净流入、中单净流入、小单净流入等信息（东财限流时自动降级至同花顺或分笔大单统计）",
     )
     def stock_individual_fund_flow(
         symbol: str = field_symbol,
         market: str = Field("sh", description="股票市场，仅支持: sh(上证), sz(深证)"),
+        limit: int = Field(30, description="返回最近N个交易日的数据，默认30条", strict=False),
     ):
-        return market_tools.stock_individual_fund_flow(symbol=symbol, market=market)
+        return market_tools.stock_individual_fund_flow(
+            symbol=symbol, market=market, limit=limit
+        )
+
+    @mcp.tool(
+        name="stock_sector_fund_flow_rank",
+        title="A股行业与概念板块资金流排行",
+        description="获取A股行业板块或概念板块的资金流向与涨跌幅排行榜。优先采用同花顺(10jqka)与新浪财经接口，规避东方财富高频封禁，支持即时、3日、5日、10日、20日资金流排行",
+    )
+    def stock_sector_fund_flow_rank(
+        sector_type: str = Field(
+            "industry",
+            description="板块类型: industry(行业板块资金流), concept(概念板块资金流), ths_summary(同花顺行业总览), sina_sector(新浪行业行情)",
+        ),
+        period: str = Field(
+            "即时",
+            description="统计周期: 即时, 3日排行, 5日排行, 10日排行, 20日排行",
+        ),
+        limit: int = Field(30, description="返回数量(int, 5-100)", strict=False),
+    ):
+        return market_tools.stock_sector_fund_flow_rank(
+            sector_type=sector_type, period=period, limit=limit
+        )
 
     @mcp.tool(
         title="获取股票相关新闻",

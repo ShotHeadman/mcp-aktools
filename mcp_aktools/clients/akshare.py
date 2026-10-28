@@ -9,19 +9,22 @@
 """
 
 import logging
+import re
 import time
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, List, Optional
 from http.client import RemoteDisconnected
 from urllib.error import URLError
 from zoneinfo import ZoneInfo
 
 import akshare as ak
 import pandas as pd
+import requests
 
 from ..cache import CacheKey
 from ..config import Settings, get_settings
 from ..exceptions import APIException, DataParsingException, ValidationException
+from ..utils.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +33,15 @@ class AkShareClient:
     """AkShare 客户端封装类。
 
     此类封装 AkShare 库的函数调用，提供统一的缓存管理、
-    错误处理和日志记录功能。
+    数据源熔断降级、速率限制、错误处理和日志记录功能。
 
     Attributes:
         settings: 配置实例
     """
+
+    # 数据源级熔断器状态: {source_name: {"failures": int, "cooldown_until": float}}
+    _source_circuit: Dict[str, Dict[str, Any]] = {}
+    _http_session: Optional[requests.Session] = None
 
     def __init__(self, settings: Optional[Settings] = None):
         """初始化 AkShare 客户端。
@@ -46,11 +53,158 @@ class AkShareClient:
         self.max_retries = self.settings.retry_max_attempts
         self.retry_backoff_factor = self.settings.retry_backoff_factor
         self.retry_max_delay = self.settings.retry_max_delay
+        self.rate_limiter = RateLimiter(
+            calls=max(1, self.settings.rate_limit_calls),
+            period=max(1, self.settings.rate_limit_period),
+        )
         
         # Initialize SQLite cache backend (Requirements 1.1, 1.2)
         self._init_sqlite_backend()
         
         logger.info("AkShare 客户端已初始化")
+
+    @classmethod
+    def get_http_session(cls) -> requests.Session:
+        """获取共享的带连接池 HTTP Session（忽略系统代理以保证稳定性）。"""
+        if cls._http_session is None:
+            session = requests.Session()
+            session.trust_env = False
+            session.headers.update({
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                )
+            })
+            cls._http_session = session
+        return cls._http_session
+
+    @classmethod
+    def reset_circuit_breaker(cls, source: Optional[str] = None) -> None:
+        """重置数据源熔断器状态。"""
+        if source:
+            cls._source_circuit.pop(source, None)
+        else:
+            cls._source_circuit.clear()
+
+    @staticmethod
+    def _infer_data_source(func_or_name: Any) -> str:
+        """根据函数或函数名推断上游数据源。"""
+        if callable(func_or_name):
+            name = getattr(func_or_name, "__name__", str(func_or_name)).lower()
+        else:
+            name = str(func_or_name).lower()
+        if (
+            name.endswith("_em")
+            or name in {
+                "stock_zh_a_hist",
+                "stock_hk_hist",
+                "stock_individual_fund_flow",
+                "macro_china_market_margin_sh",
+                "macro_china_market_margin_sz",
+            }
+        ):
+            return "eastmoney"
+        if "_tx" in name:
+            return "tencent"
+        if "_sina" in name or name in {
+            "stock_zh_a_daily",
+            "stock_zh_a_minute",
+            "stock_hk_daily",
+            "stock_us_daily",
+            "stock_zh_a_spot",
+            "stock_hk_spot",
+            "stock_zh_index_daily",
+        }:
+            return "sina"
+        if "_ths" in name or name.startswith("stock_fund_flow_"):
+            return "ths"
+        if "_xq" in name:
+            return "xueqiu"
+        if "_cninfo" in name:
+            return "cninfo"
+        return "other"
+
+    def _is_source_open(self, source: str) -> bool:
+        """检查数据源是否处于熔断开启（冷却跳过）状态。"""
+        state = self._source_circuit.get(source)
+        if not state:
+            return False
+        cooldown_until = state.get("cooldown_until", 0.0)
+        if time.time() < cooldown_until:
+            return True
+        return False
+
+    def _record_source_failure(self, source: str, error: Exception) -> None:
+        """记录数据源失败并在达到阈值时触发熔断冷却。"""
+        if source != "eastmoney":
+            return
+        state = self._source_circuit.setdefault(
+            source, {"failures": 0, "cooldown_until": 0.0}
+        )
+        state["failures"] = state.get("failures", 0) + 1
+        cooldown = getattr(self.settings, "eastmoney_cooldown_seconds", 300)
+        # 东方财富一旦出现连接断开/重置或连续2次失败，立即进入冷却期以加速备用源切换
+        is_conn_drop = isinstance(
+            error,
+            (
+                RemoteDisconnected,
+                ConnectionError,
+                URLError,
+                TimeoutError,
+                requests.exceptions.RequestException,
+            ),
+        )
+        if is_conn_drop or state["failures"] >= 2:
+            state["cooldown_until"] = time.time() + cooldown
+            logger.warning(
+                "数据源 %s 触发限流/连接异常 (%s)，进入 %ds 熔断冷却期",
+                source,
+                type(error).__name__,
+                cooldown,
+            )
+
+    def _record_source_success(self, source: str) -> None:
+        """重置数据源失败计数。"""
+        if source in self._source_circuit:
+            self._source_circuit[source] = {"failures": 0, "cooldown_until": 0.0}
+
+    @staticmethod
+    def _extract_symbol_from_kwargs(kwargs: dict) -> Optional[str]:
+        """从调用参数中提取标准化股票代码（去除 sh/sz/bj 前缀）。"""
+        raw = kwargs.get("symbol") or kwargs.get("stock")
+        if not raw or not isinstance(raw, str):
+            return None
+        s = raw.strip()
+        if len(s) == 8 and s[:2].lower() in ("sh", "sz", "bj") and s[2:].isdigit():
+            return s[2:]
+        return s
+
+    @staticmethod
+    def _slice_dataframe_by_date(
+        df: pd.DataFrame, start_date: str, end_date: str
+    ) -> pd.DataFrame:
+        """按请求的 [start_date, end_date] 裁剪 DataFrame。"""
+        if df is None or df.empty:
+            return df
+        date_col = next(
+            (
+                c
+                for c in ("日期", "date", "时间", "datetime", "交易日期", "trade_date")
+                if c in df.columns
+            ),
+            None,
+        )
+        if date_col is None:
+            return df
+        try:
+            start_ts = pd.Timestamp(start_date)
+            end_ts = pd.Timestamp(end_date)
+            dates = pd.to_datetime(df[date_col], errors="coerce")
+            mask = dates.between(start_ts, end_ts)
+            return df.loc[mask].reset_index(drop=True)
+        except Exception:
+            return df
 
     def _init_sqlite_backend(self) -> None:
         """Initialize SQLite cache backend with database path from settings.
@@ -105,6 +259,9 @@ class AkShareClient:
             
         需求: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 3.5
         """
+        if "use_range_completion" in kwargs:
+            enable_range_completion = bool(kwargs.pop("use_range_completion"))
+
         # 范围补全以日为单位；分钟行情不能按天补全或永久缓存。
         date_params = (kwargs.get('start_date'), kwargs.get('end_date'))
         has_date_params = all(
@@ -120,8 +277,16 @@ class AkShareClient:
 
         # 自动键包含请求区间，内存命中可直接复用；自定义键仍需检查覆盖范围。
         automatic_cache_key = cache_key is None
-        if cache_key is None:
-            cache_key = self._generate_cache_key(func, args, kwargs)
+        mem_cache_key = cache_key or self._generate_cache_key(
+            func, args, kwargs, exclude_keys={"timeout"}
+        )
+        # 范围补全在 SQLite 中使用不含 start_date/end_date 的规范化键名，以真正复用并增量补全同一标的缓存
+        range_cache_key = cache_key or self._generate_cache_key(
+            func, args, kwargs, exclude_keys={"start_date", "end_date", "timeout"}
+        )
+
+        symbol = self._extract_symbol_from_kwargs(kwargs)
+        data_type = self._infer_data_type(func.__name__)
 
         # 设置 TTL 值
         if ttl is None:
@@ -132,91 +297,90 @@ class AkShareClient:
             kwargs['timeout'] = timeout
 
         if use_range_completion:
-            cache = CacheKey.init(cache_key, ttl=ttl, maxsize=self.settings.cache_max_size)
+            cache = CacheKey.init(
+                range_cache_key,
+                ttl=ttl,
+                maxsize=self.settings.cache_max_size,
+                symbol=symbol,
+                data_type=data_type,
+            )
             if automatic_cache_key:
-                cached_data = cache.cache1.get(cache_key)
+                cached_data = cache.cache1.get(mem_cache_key)
                 if cached_data is not None:
                     return cached_data.copy()
 
             # 使用智能范围补全逻辑
-            # 需求 6.1: 记录范围补全启用日志
             logger.debug(
                 "启用范围补全: key=%s, 函数=%s, 范围=[%s, %s]",
-                cache_key, func.__name__, kwargs['start_date'], kwargs['end_date']
+                range_cache_key, func.__name__, kwargs['start_date'], kwargs['end_date']
             )
 
             # 检查缓存范围
             range_check = self._check_cache_range(
-                cache_key,
+                range_cache_key,
                 kwargs['start_date'],
                 kwargs['end_date'],
-                refresh_last_bar=self._infer_data_type(func.__name__) == 'price',
+                refresh_last_bar=data_type == 'price',
             )
 
             status = range_check['status']
 
-            # 需求 2.4: 完全命中时直接返回缓存数据
+            # 需求 2.4: 完全命中时按请求区间切片并返回
             if status == 'full_hit':
-                # 需求 6.1: 记录完全命中日志
-                logger.info(
-                    "范围完全命中，直接返回缓存数据: key=%s, 行数=%d",
-                    cache_key, len(range_check['cached_data'])
+                sliced_df = self._slice_dataframe_by_date(
+                    range_check['cached_data'], kwargs['start_date'], kwargs['end_date']
                 )
-                cache.cache1[cache_key] = range_check['cached_data'].copy()
-                return range_check['cached_data']
+                logger.info(
+                    "范围完全命中，直接返回缓存数据: key=%s, 切片行数=%d",
+                    range_cache_key, len(sliced_df)
+                )
+                cache.cache1[mem_cache_key] = sliced_df.copy()
+                return sliced_df
             
-            # 需求 2.5: 缓存不存在或部分命中，需要补全
+            # 需求 2.5: 缓存不存在，获取完整数据
             if status == 'miss':
-                # 需求 6.1: 记录缓存未命中日志
                 logger.info(
                     "缓存未命中，获取完整范围数据: key=%s, 范围=[%s, %s]",
-                    cache_key, kwargs['start_date'], kwargs['end_date']
+                    range_cache_key, kwargs['start_date'], kwargs['end_date']
                 )
-                # 缓存不存在，使用原有逻辑获取完整数据
                 try:
                     result = self._fetch_data_with_retry(func, args, kwargs)
 
                     if result is not None and not result.empty:
-                        # 提取日期范围并存入缓存
                         from ..cache.sqlite_backend import SQLiteCacheBackend
                         from ..cache.serialization import serialize_dataframe
 
                         start_date, end_date = SQLiteCacheBackend.extract_date_range(result)
 
-                        # 使用 set_with_range() 存储数据和日期范围
                         backend = CacheKey.get_sqlite_backend()
                         if backend is not None and start_date is not None and end_date is not None:
                             try:
                                 serialized = serialize_dataframe(result)
                                 backend.set_with_range(
-                                    cache_key,
+                                    range_cache_key,
                                     serialized,
                                     start_date=start_date,
                                     end_date=end_date,
-                                    data_type=self._infer_data_type(func.__name__),
-                                    symbol=kwargs.get('symbol')
+                                    data_type=data_type,
+                                    symbol=symbol,
                                 )
                                 logger.debug(
                                     "数据已缓存（带范围）: key=%s, 范围=[%s, %s], 行数=%d",
-                                    cache_key, start_date, end_date, len(result)
+                                    range_cache_key, start_date, end_date, len(result)
                                 )
                             except Exception as cache_error:
-                                # 需求 5.3, 6.4: 缓存失败不影响数据返回
                                 logger.warning(
                                     "缓存数据失败: %s, 继续返回数据",
                                     cache_error, exc_info=True
                                 )
 
-                        # 同时更新内存缓存（SQLite 已经通过 set_with_range 设置）
                         try:
-                            cache = CacheKey.init(
-                                cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
+                            sliced_result = self._slice_dataframe_by_date(
+                                result, kwargs['start_date'], kwargs['end_date']
                             )
-                            # 只设置内存缓存，不重复写入 SQLite
-                            cache.cache1[cache_key] = result.copy()
-                            logger.debug("缓存已设置（仅内存）: %s (ttl=%ds)", cache_key, ttl)
+                            cache.cache1[mem_cache_key] = sliced_result.copy()
+                            return sliced_result
                         except Exception as mem_cache_error:
-                            # 需求 5.3, 6.4: 内存缓存失败不影响数据返回
                             logger.warning(
                                 "内存缓存失败: %s, 继续返回数据",
                                 mem_cache_error
@@ -225,126 +389,112 @@ class AkShareClient:
                     return result
 
                 except Exception as e:
-                    # 需求 5.4, 6.4: API 调用失败的错误处理
                     logger.error(
                         "获取完整范围数据失败: key=%s, 错误=%s",
-                        cache_key, e, exc_info=True
+                        range_cache_key, e, exc_info=True
                     )
                     raise
             
             elif status == 'partial_hit':
-                # 需求 2.1, 2.2, 2.3: 部分命中，需要补全缺失范围
-                # 需求 6.1: 记录部分命中日志
                 logger.info(
                     "缓存部分命中，补全缺失数据段: key=%s, 缺失段数=%d",
-                    cache_key, len(range_check['missing_ranges'])
+                    range_cache_key, len(range_check['missing_ranges'])
                 )
 
                 cached_df = range_check['cached_data']
                 missing_ranges = range_check['missing_ranges']
 
-                # 需求 3.1, 3.2: 获取缺失的数据段
                 try:
-                    # 从 kwargs 中移除 start_date 和 end_date，因为我们会为每个范围单独设置
                     fetch_kwargs = {k: v for k, v in kwargs.items()
                                    if k not in ['start_date', 'end_date']}
 
                     new_dfs = self._fetch_missing_ranges(func, missing_ranges, **fetch_kwargs)
 
-                    # 请求失败或无新数据时保留原缓存的更新时间，避免把旧行情标成刚刷新。
                     if not new_dfs:
-                        return cached_df.copy()
+                        return self._slice_dataframe_by_date(
+                            cached_df.copy(), kwargs['start_date'], kwargs['end_date']
+                        )
 
-                    # 需求 3.4, 3.5: 合并缓存数据和新数据
                     merged_df = self._merge_dataframes(cached_df, new_dfs, missing_ranges)
 
-                    # 提取合并后数据的日期范围
                     from ..cache.sqlite_backend import SQLiteCacheBackend
                     from ..cache.serialization import serialize_dataframe
 
                     start_date, end_date = SQLiteCacheBackend.extract_date_range(merged_df)
 
-                    # 使用 set_with_range() 更新缓存
                     backend = CacheKey.get_sqlite_backend()
                     if backend is not None and start_date is not None and end_date is not None:
                         try:
                             serialized = serialize_dataframe(merged_df)
                             backend.set_with_range(
-                                cache_key,
+                                range_cache_key,
                                 serialized,
                                 start_date=start_date,
                                 end_date=end_date,
-                                data_type=self._infer_data_type(func.__name__),
-                                symbol=kwargs.get('symbol')
+                                data_type=data_type,
+                                symbol=symbol,
                             )
-                            # 需求 6.1: 记录缓存更新日志
                             logger.info(
                                 "缓存已更新（带范围）: key=%s, 范围=[%s, %s], 行数=%d",
-                                cache_key, start_date, end_date, len(merged_df)
+                                range_cache_key, start_date, end_date, len(merged_df)
                             )
                         except Exception as cache_error:
-                            # 需求 5.3, 6.4: 缓存更新失败不影响数据返回
                             logger.warning(
                                 "更新缓存失败: %s, 继续返回合并后的数据",
                                 cache_error, exc_info=True
                             )
 
-                    # 同时更新内存缓存（SQLite 已经通过 set_with_range 设置）
+                    sliced_merged = self._slice_dataframe_by_date(
+                        merged_df, kwargs['start_date'], kwargs['end_date']
+                    )
                     try:
-                        cache = CacheKey.init(
-                            cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
-                        )
-                        # 只设置内存缓存，不重复写入 SQLite
-                        cache.cache1[cache_key] = merged_df.copy()
-                        logger.debug("缓存已设置（仅内存）: %s (ttl=%ds)", cache_key, ttl)
+                        cache.cache1[mem_cache_key] = sliced_merged.copy()
                     except Exception as mem_cache_error:
-                        # 需求 5.3, 6.4: 内存缓存失败不影响数据返回
                         logger.warning(
                             "内存缓存失败: %s, 继续返回数据",
                             mem_cache_error
                         )
 
-                    return merged_df
+                    return sliced_merged
 
                 except Exception as e:
-                    # 需求 5.4: API 失败时的降级处理
-                    # 需求 6.4: 记录详细的错误信息和上下文
                     logger.error(
                         "补全数据失败: %s, 错误类型=%s, key=%s",
-                        e, type(e).__name__, cache_key,
+                        e, type(e).__name__, range_cache_key,
                         exc_info=True
                     )
                     if cached_df is not None and not cached_df.empty:
-                        # 需求 5.4: 降级返回缓存数据
                         logger.warning(
                             "降级返回缓存数据: key=%s, 行数=%d",
-                            cache_key, len(cached_df)
+                            range_cache_key, len(cached_df)
                         )
-                        return cached_df
+                        return self._slice_dataframe_by_date(
+                            cached_df, kwargs['start_date'], kwargs['end_date']
+                        )
                     else:
-                        # 如果连缓存数据都没有，重新抛出异常
                         logger.error("无缓存数据可用，抛出异常")
                         raise
         
-        # 禁用范围补全或没有日期参数，使用原有的简单缓存逻辑
+        # 禁用范围补全或没有日期参数，使用简单缓存逻辑
+        cache_key = mem_cache_key
         logger.debug(f"使用简单缓存逻辑: {cache_key}")
         
-        # 初始化缓存
         cache = CacheKey.init(
-            cache_key, ttl=ttl, maxsize=self.settings.cache_max_size
+            cache_key,
+            ttl=ttl,
+            maxsize=self.settings.cache_max_size,
+            symbol=symbol,
+            data_type=data_type,
         )
 
-        # 尝试从缓存获取
         cached_data = cache.get() if use_disk_cache else cache.cache1.get(cache_key)
         if cached_data is not None:
             logger.debug(f"缓存命中: {cache_key}")
             return cached_data.copy()
 
-        # 缓存未命中，调用 AkShare 函数
         result = self._fetch_data_with_retry(func, args, kwargs)
         
         if result is not None:
-            # 存入缓存
             if use_disk_cache:
                 cache.set(result.copy())
             else:
@@ -359,37 +509,34 @@ class AkShareClient:
         args: tuple,
         kwargs: dict
     ) -> Optional[pd.DataFrame]:
-        """使用重试机制调用 AkShare 函数获取数据。
-        
-        此方法封装了原有的重试逻辑，供 call() 方法内部使用。
-        
-        参数:
-            func: 要调用的 AkShare 函数
-            args: 位置参数
-            kwargs: 关键字参数
-            
-        返回:
-            pandas DataFrame 或 None（如果调用失败）
-            
-        抛出:
-            APIException: 当 AkShare 函数调用失败时
-            DataParsingException: 当返回的数据无法解析时
-        """
+        """使用重试、速率限制和数据源熔断机制调用 AkShare 函数。"""
+        source = self._infer_data_source(func.__name__)
+        if self._is_source_open(source):
+            msg = f"数据源 {source} ({func.__name__}) 处于限流熔断冷却期，直接跳过"
+            logger.warning(msg)
+            raise APIException(api_name=f"AkShare.{func.__name__}", message=msg)
+
         logger.info(f"调用 AkShare 函数: {func.__name__}, args={args}, kwargs={kwargs}")
 
-        # 重试机制
-        last_exception = None
-        for attempt in range(self.max_retries):
-            try:
-                # 调用 AkShare 函数
-                result = func(*args, **kwargs)
+        max_attempts = (
+            min(self.max_retries, max(1, getattr(self.settings, "eastmoney_max_retries", 1)))
+            if source == "eastmoney"
+            else self.max_retries
+        )
 
-                # 验证返回结果
+        last_exception = None
+        for attempt in range(max_attempts):
+            try:
+                if self.rate_limiter:
+                    self.rate_limiter.acquire(blocking=True, timeout=10)
+
+                result = func(*args, **kwargs)
+                self._record_source_success(source)
+
                 if result is None:
                     logger.warning(f"AkShare 函数 {func.__name__} 返回 None")
                     return None
 
-                # 验证返回的是 DataFrame
                 if not isinstance(result, pd.DataFrame):
                     error_msg = f"期望返回 pandas.DataFrame，但得到 {type(result).__name__}"
                     logger.error(f"数据解析错误: {error_msg}")
@@ -397,7 +544,6 @@ class AkShareClient:
                         source=f"AkShare.{func.__name__}", message=error_msg
                     )
 
-                # 检查 DataFrame 是否为空
                 if result.empty:
                     logger.warning(f"AkShare 函数 {func.__name__} 返回空 DataFrame")
                     return result
@@ -405,48 +551,48 @@ class AkShareClient:
                 return result
 
             except DataParsingException:
-                # 重新抛出数据解析异常
                 raise
 
             except TimeoutError as e:
-                # 超时错误，记录特定日志并进行重试
                 last_exception = e
-                if attempt < self.max_retries - 1:
+                self._record_source_failure(source, e)
+                if attempt < max_attempts - 1 and not self._is_source_open(source):
                     wait_time = min(
                         self.retry_backoff_factor ** attempt,
                         self.retry_max_delay
                     )
                     logger.warning(
-                        f"请求超时 (尝试 {attempt + 1}/{self.max_retries}): {func.__name__}, "
+                        f"请求超时 (尝试 {attempt + 1}/{max_attempts}): {func.__name__}, "
                         f"timeout={kwargs.get('timeout')}, {wait_time:.1f}秒后重试..."
                     )
                     time.sleep(wait_time)
                 else:
                     logger.error(
-                        f"请求超时，达到最大重试次数 ({self.max_retries}): {func.__name__}"
+                        f"请求超时，停止重试 ({attempt + 1}/{max_attempts}): {func.__name__}"
                     )
+                    break
 
-            except (RemoteDisconnected, URLError, ConnectionError) as e:
-                # 网络相关错误，进行重试
+            except (RemoteDisconnected, URLError, ConnectionError, requests.exceptions.RequestException) as e:
                 last_exception = e
-                if attempt < self.max_retries - 1:
-                    # 指数退避策略
+                self._record_source_failure(source, e)
+                if attempt < max_attempts - 1 and not self._is_source_open(source):
                     wait_time = min(
                         self.retry_backoff_factor ** attempt,
                         self.retry_max_delay
                     )
                     logger.warning(
-                        f"网络错误 (尝试 {attempt + 1}/{self.max_retries}): {str(e)}, "
+                        f"网络错误 (尝试 {attempt + 1}/{max_attempts}): {str(e)}, "
                         f"{wait_time:.1f}秒后重试..."
                     )
                     time.sleep(wait_time)
                 else:
                     logger.error(
-                        f"达到最大重试次数 ({self.max_retries}), 最后错误: {str(e)}"
+                        f"停止重试 ({attempt + 1}/{max_attempts}), 最后错误: {str(e)}"
                     )
+                    break
 
             except KeyError as e:
-                # 数据结构变化导致的 KeyError，记录特定消息并抛出 DataParsingException
+                self._record_source_failure(source, e)
                 error_msg = f"数据结构可能已变化，缺少键: {e}"
                 logger.error(
                     f"AkShare 函数 {func.__name__} 数据结构异常: {error_msg}",
@@ -458,7 +604,6 @@ class AkShareClient:
                 )
 
             except ValueError as e:
-                # 参数值错误，记录特定消息并抛出 ValidationException
                 error_msg = f"参数值错误: {e}"
                 logger.error(
                     f"AkShare 函数 {func.__name__} 参数错误: {error_msg}",
@@ -470,7 +615,7 @@ class AkShareClient:
                 )
 
             except Exception as e:
-                # 其他未知异常，记录完整异常详情并抛出 APIException
+                self._record_source_failure(source, e)
                 error_msg = str(e)
                 logger.error(
                     f"AkShare 函数调用失败: {func.__name__}, "
@@ -479,34 +624,42 @@ class AkShareClient:
                 )
                 raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
 
-        # 所有重试都失败
-        error_msg = f"网络连接失败，已重试 {self.max_retries} 次: {str(last_exception)}"
+        error_msg = f"网络连接失败，已尝试 {max_attempts} 次: {str(last_exception)}"
         logger.error(f"AkShare 函数调用失败: {func.__name__}, {error_msg}")
         raise APIException(api_name=f"AkShare.{func.__name__}", message=error_msg)
 
-    def _generate_cache_key(self, func: Callable, args: tuple, kwargs: dict) -> str:
+    def _generate_cache_key(
+        self,
+        func: Callable,
+        args: tuple,
+        kwargs: dict,
+        exclude_keys: Optional[set] = None,
+    ) -> str:
         """生成缓存键。
-
-        缓存键包含函数名和所有参数，以确保唯一性。
 
         Args:
             func: AkShare 函数
             args: 位置参数
             kwargs: 关键字参数
+            exclude_keys: 需要从缓存键中排除的参数名集合（如 start_date, end_date, timeout）
 
         Returns:
             生成的缓存键字符串
         """
-        # 构建缓存键：函数名-参数
         key_parts = [func.__name__]
 
         if args:
             key_parts.append(str(args))
 
         if kwargs:
-            # 对 kwargs 排序以确保一致性
-            sorted_kwargs = sorted(kwargs.items())
-            key_parts.append(str(sorted_kwargs))
+            filtered = (
+                {k: v for k, v in kwargs.items() if k not in exclude_keys}
+                if exclude_keys
+                else kwargs
+            )
+            if filtered:
+                sorted_kwargs = sorted(filtered.items())
+                key_parts.append(str(sorted_kwargs))
 
         cache_key = "-".join(key_parts)
         return cache_key
@@ -667,10 +820,8 @@ class AkShareClient:
                 range_kwargs['start_date'] = start
                 range_kwargs['end_date'] = end
 
-                # 调用 AkShare 函数获取数据
-                # 注意：这里直接调用函数，不使用 self.call() 以避免缓存
-                # 因为我们稍后会将合并后的完整数据存入缓存
-                df = func(**range_kwargs)
+                # 调用 AkShare 函数获取数据（复用带重试与熔断机制的内部方法）
+                df = self._fetch_data_with_retry(func, (), range_kwargs)
 
                 if df is not None and not df.empty:
                     fetched_dfs.append({
@@ -1158,22 +1309,41 @@ class AkShareClient:
             self._check_dividend_invalidation(symbol)
 
         full_symbol = f"{market.lower()}{symbol}"
-        sources = (
-            (ak.stock_zh_a_hist_tx, {"symbol": full_symbol}),
-            (ak.stock_zh_a_daily, {"symbol": full_symbol}),
-            (ak.stock_zh_a_hist, {"symbol": symbol, "period": "daily"}),
+        is_etf = (
+            (market.lower() == "sh" and symbol.startswith(("51", "56", "58")))
+            or (market.lower() == "sz" and symbol.startswith("159"))
         )
+        if is_etf:
+            sources = (
+                (ak.stock_zh_a_hist_tx, {"symbol": full_symbol}),
+                (ak.fund_etf_hist_sina, {"symbol": full_symbol}),
+                (ak.fund_etf_hist_em, {"symbol": symbol, "period": "daily"}),
+            )
+        else:
+            sources = (
+                (ak.stock_zh_a_hist_tx, {"symbol": full_symbol}),
+                (ak.stock_zh_a_daily, {"symbol": full_symbol}),
+                (ak.stock_zh_a_hist, {"symbol": symbol, "period": "daily"}),
+            )
         last_error = None
         for func, source_kwargs in sources:
             try:
-                result = self.call(
-                    func,
-                    **source_kwargs,
-                    start_date=fetch_start.strftime("%Y%m%d"),
-                    end_date=end_date,
-                    adjust=adjust,
-                    ttl=ttl if ttl is not None else 3600,
-                )
+                if func is ak.fund_etf_hist_sina:
+                    result = self.call(
+                        func,
+                        **source_kwargs,
+                        ttl=ttl if ttl is not None else 3600,
+                        enable_range_completion=False,
+                    )
+                else:
+                    result = self.call(
+                        func,
+                        **source_kwargs,
+                        start_date=fetch_start.strftime("%Y%m%d"),
+                        end_date=end_date,
+                        adjust=adjust,
+                        ttl=ttl if ttl is not None else 3600,
+                    )
                 if result is not None and not result.empty:
                     result = self._resample_daily_bars(result, period, start_date, end_date)
                     if not result.empty:
@@ -1188,7 +1358,10 @@ class AkShareClient:
 
     @staticmethod
     def _resample_daily_bars(
-        df: pd.DataFrame, period: str, start_date: str, end_date: str
+        df: pd.DataFrame,
+        period: str,
+        start_date: str = "19900101",
+        end_date: str = "22220101",
     ) -> pd.DataFrame:
         """按实际交易日期聚合 OHLCV，日期使用该周期最后一个已有交易日。"""
         date_col = next((col for col in ("date", "日期") if col in df.columns), None)
@@ -1299,7 +1472,7 @@ class AkShareClient:
         adjust: str = "",
         ttl: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
-        """获取港股历史行情数据，失败时尝试新浪备用接口。
+        """获取港股历史行情数据，优先新浪日线聚合，东财作为备选。
 
         Args:
             symbol: 股票代码
@@ -1312,70 +1485,177 @@ class AkShareClient:
         Returns:
             历史行情 DataFrame
         """
+        if period not in {"daily", "weekly", "monthly"}:
+            raise ValidationException("period", "仅支持 daily、weekly、monthly")
+
+        fetch_start = pd.Timestamp(start_date)
+        if period != "daily":
+            frequency = "W-SUN" if period == "weekly" else "M"
+            fetch_start = fetch_start.to_period(frequency).start_time
+
+        last_error = None
+
+        # 优先使用稳定的新浪港股日线接口并支持周/月线重采样
         try:
-            return self.call(
+            sina_df = self.call(
+                ak.stock_hk_daily,
+                symbol=symbol,
+                adjust=adjust,
+                ttl=ttl or 3600,
+                enable_range_completion=False,
+            )
+            if sina_df is not None and not sina_df.empty:
+                normalized = sina_df.rename(
+                    columns={
+                        "date": "日期",
+                        "open": "开盘",
+                        "close": "收盘",
+                        "high": "最高",
+                        "low": "最低",
+                        "volume": "成交量",
+                    }
+                ).copy()
+                resampled = self._resample_daily_bars(
+                    normalized, period, start_date, end_date
+                )
+                if not resampled.empty:
+                    if "日期" in resampled.columns:
+                        resampled["日期"] = pd.to_datetime(resampled["日期"]).dt.strftime(
+                            "%Y-%m-%d"
+                        )
+                    return resampled
+        except Exception as sina_err:
+            last_error = sina_err
+            logger.warning(f"新浪港股历史行情接口失败，尝试东财接口: {sina_err}")
+
+        try:
+            em_df = self.call(
                 ak.stock_hk_hist,
                 symbol=symbol,
-                period=period,
-                start_date=start_date,
+                period="daily",
+                start_date=fetch_start.strftime("%Y%m%d"),
                 end_date=end_date,
                 adjust=adjust,
-                ttl=ttl or 3600,  # 1 小时
-                # 周/月 K 线在周期内会改变日期，整份快照刷新可避免合并出重复周期。
-                enable_range_completion=period == "daily",
-                use_disk_cache=period == "daily",
+                ttl=ttl or 3600,
             )
-        except APIException as e:
-            # 只在 daily 周期时尝试新浪备用接口（新浪接口不支持 weekly/monthly）
-            if period == "daily":
-                logger.warning(f"东财港股历史行情接口失败，尝试新浪备用接口: {e}")
-                try:
-                    logger.info(f"尝试新浪港股接口，代码: {symbol}")
-                    result = self.call(
-                        ak.stock_hk_daily,
-                        symbol=symbol,
-                        adjust=adjust,
-                        ttl=ttl or 3600,
-                        use_disk_cache=False,
-                    )
-                    if result is not None and not result.empty:
-                        logger.info(f"新浪港股备用接口成功获取数据: {symbol}")
-                        # 统一列名格式，使其与东财接口一致
-                        if 'date' in result.columns:
-                            result.rename(columns={'date': '日期'}, inplace=True)
-                        if 'open' in result.columns:
-                            result.rename(columns={
-                                'open': '开盘',
-                                'close': '收盘',
-                                'high': '最高',
-                                'low': '最低',
-                                'volume': '成交量'
-                            }, inplace=True)
-                        # 添加缺失的列
-                        if '成交额' not in result.columns:
-                            result['成交额'] = None
-                        if '换手率' not in result.columns:
-                            result['换手率'] = None
-                        if '振幅' not in result.columns:
-                            result['振幅'] = None
-                        if '涨跌幅' not in result.columns:
-                            result['涨跌幅'] = None
-                        if '涨跌额' not in result.columns:
-                            result['涨跌额'] = None
-                        
-                        # 过滤日期范围（新浪接口返回所有历史数据）
-                        if '日期' in result.columns:
-                            result['日期'] = pd.to_datetime(result['日期'])
-                            start = pd.to_datetime(start_date)
-                            end = pd.to_datetime(end_date)
-                            result = result[(result['日期'] >= start) & (result['日期'] <= end)]
-                            result['日期'] = result['日期'].dt.strftime('%Y-%m-%d')
-                        
-                        return result
-                except Exception as sina_error:
-                    logger.error(f"新浪港股备用接口也失败: {sina_error}")
-            
-            raise e  # 抛出原始异常
+            if em_df is not None and not em_df.empty:
+                resampled = self._resample_daily_bars(em_df, period, start_date, end_date)
+                if not resampled.empty:
+                    return resampled
+        except Exception as em_err:
+            last_error = em_err
+            logger.error(f"东财港股历史行情接口也失败: {em_err}")
+
+        if last_error is not None:
+            raise APIException("AkShare.stock_hk_hist", str(last_error)) from last_error
+        return None
+
+    def fetch_tencent_quotes(self, symbols: List[str]) -> List[Dict[str, Any]]:
+        """通过腾讯极速行情接口 (qt.gtimg.cn) 批量获取单只或多只股票/ETF/指数五档盘口及估值快照。
+
+        Args:
+            symbols: 标准化带前缀代码列表，如 ['sh600519', 'sz000001', 'sh510300']
+
+        Returns:
+            解析后的字典列表
+        """
+        if not symbols:
+            return []
+
+        normalized = []
+        for sym in symbols:
+            s = str(sym).strip().lower()
+            if not s:
+                continue
+            if "." in s:
+                parts = s.split(".", 1)
+                if parts[0] in ("sh", "sz", "bj", "hk"):
+                    s = f"{parts[0]}{parts[1]}"
+                elif parts[1] in ("sh", "sz", "bj", "hk"):
+                    s = f"{parts[1]}{parts[0]}"
+            elif not s.startswith(("sh", "sz", "bj", "hk")):
+                if len(s) == 5 and s.isdigit():
+                    s = f"hk{s}"
+                elif s.startswith(("5", "6", "9")):
+                    s = f"sh{s}"
+                elif s.startswith(("4", "8")):
+                    s = f"bj{s}"
+                else:
+                    s = f"sz{s}"
+            normalized.append(s)
+
+        if not normalized:
+            return []
+
+        url = f"http://qt.gtimg.cn/q={','.join(normalized)}"
+        session = self.get_http_session()
+        resp = session.get(url, timeout=6)
+        resp.raise_for_status()
+        content = resp.content.decode("gbk", errors="ignore")
+
+        def _to_float(val: str) -> Optional[float]:
+            try:
+                return float(val) if val and val.strip() != "" else None
+            except (ValueError, TypeError):
+                return None
+
+        results: List[Dict[str, Any]] = []
+        for line in content.strip().split(";"):
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            lhs, rhs = line.split("=", 1)
+            raw_key = lhs.replace("v_", "").strip()
+            body = rhs.strip().strip('"')
+            parts = body.split("~")
+            if len(parts) < 45:
+                continue
+
+            bid_levels = []
+            ask_levels = []
+            for i in range(5):
+                bp = _to_float(parts[9 + i * 2])
+                bv = _to_float(parts[10 + i * 2])
+                ap = _to_float(parts[19 + i * 2])
+                av = _to_float(parts[20 + i * 2])
+                if bp is not None:
+                    bid_levels.append({"level": i + 1, "price": bp, "volume_lots": int(bv or 0)})
+                if ap is not None:
+                    ask_levels.append({"level": i + 1, "price": ap, "volume_lots": int(av or 0)})
+
+            results.append({
+                "full_symbol": raw_key,
+                "symbol": parts[2],
+                "name": parts[1],
+                "price": _to_float(parts[3]),
+                "prev_close": _to_float(parts[4]),
+                "open": _to_float(parts[5]),
+                "high": _to_float(parts[33]),
+                "low": _to_float(parts[34]),
+                "change": _to_float(parts[31]),
+                "pct_change": _to_float(parts[32]),
+                "amplitude_pct": _to_float(parts[43]),
+                "volume_lots": _to_float(parts[6]),
+                "amount_wan": _to_float(parts[37]),
+                "turnover_pct": _to_float(parts[38]),
+                "volume_ratio": _to_float(parts[49]) if len(parts) > 49 else None,
+                "outer_vol_lots": _to_float(parts[7]),
+                "inner_vol_lots": _to_float(parts[8]),
+                "vwap": _to_float(parts[51]) if len(parts) > 51 else None,
+                "pe_ttm": _to_float(parts[39]),
+                "pe_dynamic": _to_float(parts[52]) if len(parts) > 52 else None,
+                "pe_static": _to_float(parts[53]) if len(parts) > 53 else None,
+                "pb": _to_float(parts[46]) if len(parts) > 46 else None,
+                "float_market_cap_yi": _to_float(parts[44]),
+                "total_market_cap_yi": _to_float(parts[45]),
+                "limit_up": _to_float(parts[47]) if len(parts) > 47 else None,
+                "limit_down": _to_float(parts[48]) if len(parts) > 48 else None,
+                "timestamp": parts[30],
+                "bids": bid_levels,
+                "asks": ask_levels,
+            })
+
+        return results
 
     def stock_us_daily(
         self, symbol: str, adjust: str = "", ttl: Optional[int] = None

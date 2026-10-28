@@ -9,6 +9,7 @@
 
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 from ..backtest.config import BacktestConfig
@@ -25,7 +26,7 @@ from ..utils.user_code import SAFE_BUILTINS, validate_user_code
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = "data/backtest.db"
+DEFAULT_DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "backtest.db")
 
 
 def _yes_no(value: bool) -> str:

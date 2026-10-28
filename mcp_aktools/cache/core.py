@@ -9,6 +9,7 @@
 """
 
 import logging
+import re
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -41,23 +42,38 @@ class CacheKey:
     _dividend_checker: Optional[Any] = None
     _sqlite_initialized: bool = False
 
-    def __init__(self, key: str, ttl: int = 600, maxsize: int = 100):
+    def __init__(
+        self,
+        key: str,
+        ttl: int = 600,
+        maxsize: int = 100,
+        symbol: Optional[str] = None,
+        data_type: Optional[str] = None,
+    ):
         """初始化缓存键。
         
         参数:
             key: 缓存键字符串。
             ttl: 内存缓存 TTL，单位为秒（默认：600）。
             maxsize: 内存缓存的最大容量（默认：100）。
+            symbol: 可选的关联股票代码。
+            data_type: 可选的缓存数据类型。
         """
         self.key = key
         self.ttl = ttl
         self.cache1 = TTLCache(maxsize=maxsize, ttl=ttl)
         
-        self._symbol = self._extract_symbol_from_key(key)
-        self._data_type = self._extract_data_type_from_key(key)
+        self._symbol = symbol or self._extract_symbol_from_key(key)
+        self._data_type = data_type or self._extract_data_type_from_key(key)
 
     @staticmethod
-    def init(key: str, ttl: int = 600, maxsize: int = 100) -> 'CacheKey':
+    def init(
+        key: str,
+        ttl: int = 600,
+        maxsize: int = 100,
+        symbol: Optional[str] = None,
+        data_type: Optional[str] = None,
+    ) -> 'CacheKey':
         """初始化或获取 CacheKey 实例。
         
         这是一个工厂方法，如果给定键已存在 CacheKey 则返回现有实例，
@@ -67,13 +83,20 @@ class CacheKey:
             key: 缓存键字符串。
             ttl: 内存缓存 TTL，单位为秒（默认：600）。
             maxsize: 内存缓存的最大容量（默认：100）。
+            symbol: 可选的关联股票代码。
+            data_type: 可选的缓存数据类型。
             
         返回:
             给定键的 CacheKey 实例。
         """
         if key in CacheKey.ALL:
-            return CacheKey.ALL[key]
-        cache = CacheKey(key, ttl, maxsize)
+            existing = CacheKey.ALL[key]
+            if symbol and not existing._symbol:
+                existing._symbol = symbol
+            if data_type and not existing._data_type:
+                existing._data_type = data_type
+            return existing
+        cache = CacheKey(key, ttl, maxsize, symbol=symbol, data_type=data_type)
         return CacheKey.ALL.setdefault(key, cache)
 
     @classmethod
@@ -92,8 +115,15 @@ class CacheKey:
             disk_ttl: 磁盘缓存 TTL，单位为秒。None 或非正数表示不过期。
         """
         if cls._sqlite_initialized:
-            logger.debug("SQLite 后端已初始化")
-            return
+            if (
+                db_path is None
+                or (
+                    cls._sqlite_backend is not None
+                    and str(cls._sqlite_backend.db_path) == str(db_path)
+                )
+            ):
+                logger.debug("SQLite 后端已初始化")
+                return
         
         try:
             cls._sqlite_backend = SQLiteCacheBackend(db_path, disk_ttl=disk_ttl)
@@ -128,23 +158,38 @@ class CacheKey:
     def _extract_symbol_from_key(self, key: str) -> Optional[str]:
         """从缓存键中提取股票代码。
         
-        缓存键通常遵循以下模式：
+        支持以下模式：
         - stock_prices:600000:daily
         - stock_info:000001
+        - stock_zh_a_hist_tx-[('adjust', ''), ('symbol', 'sh600519')]
+        - stock_individual_fund_flow-[('market', 'sz'), ('stock', '001309')]
+        - stock_news_em-600519-20
         
         参数:
             key: 缓存键字符串。
             
         返回:
-            提取的股票代码，如果未找到则返回 None。
+            提取的股票代码（A股规范化为6位数字），如果未找到则返回 None。
         """
         parts = key.split(':')
         if len(parts) >= 2:
-            # 第二部分通常是股票代码
             potential_symbol = parts[1]
-            # 检查是否看起来像股票代码（仅数字，6 个字符）
             if potential_symbol.isdigit() and len(potential_symbol) == 6:
                 return potential_symbol
+
+        # 匹配元组形式 ('symbol', 'sh600519') 或 ('stock', '000001')
+        match = re.search(r"\('(?:symbol|stock)',\s*'([^']+)'\)", key)
+        if match:
+            raw_sym = match.group(1).strip()
+            if len(raw_sym) == 8 and raw_sym[:2].lower() in ("sh", "sz", "bj") and raw_sym[2:].isdigit():
+                return raw_sym[2:]
+            return raw_sym
+
+        # 匹配横杠分隔形式如 stock_news_em-600519-20
+        dash_match = re.search(r"-(?:sh|sz|bj)?(\d{6})(?:-|$)", key, re.IGNORECASE)
+        if dash_match:
+            return dash_match.group(1)
+
         return None
 
     def _extract_data_type_from_key(self, key: str) -> Optional[str]:
@@ -156,16 +201,14 @@ class CacheKey:
         返回:
             数据类型字符串，如果未找到则返回 None。
         """
-        parts = key.split(':')
-        if len(parts) >= 1:
+        parts = re.split(r"[:\-]", key, maxsplit=1)
+        if parts:
             first_part = parts[0].lower()
-            if 'price' in first_part:
-                return 'price'
-            elif 'hist' in first_part or 'daily' in first_part or 'candle' in first_part:
+            if any(t in first_part for t in ('price', 'hist', 'daily', 'candle')):
                 return 'price'
             elif 'dividend' in first_part:
                 return 'dividend'
-            elif 'info' in first_part:
+            elif any(t in first_part for t in ('info', 'profile', 'abstract', 'indicator')):
                 return 'info'
         return None
 

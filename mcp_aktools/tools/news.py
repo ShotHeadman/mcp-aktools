@@ -8,7 +8,9 @@
 import json
 import logging
 import os
-from datetime import datetime
+import random
+import time
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 import akshare as ak
@@ -42,7 +44,9 @@ def stock_news(
     symbol: str = Field(description="股票代码"),
     limit: int = Field(15, description="返回数量(int)", strict=False),
 ) -> str:
-    """根据股票代码获取近期相关新闻。
+    """根据股票代码获取近期相关新闻及公司公告。
+
+    优先组合巨潮资讯公司公告、财联社电报匹配与东方财富个股新闻，确保东财限流时仍能稳定返回。
 
     Args:
         symbol: 股票代码
@@ -52,56 +56,70 @@ def stock_news(
         str: 新闻内容字符串，每条新闻一行，或 "Not Found for {symbol}"
     """
     try:
-        # 验证参数
-        Validators.validate_symbol(symbol)
+        symbol = Validators.validate_symbol(symbol)
         Validators.validate_limit(limit, min_val=1, max_val=100)
 
         logger.info(f"获取新闻: symbol={symbol}, limit={limit}")
+        client = get_akshare_client()
+        collected_news: List[str] = []
 
-        # 优先使用财联社新闻接口
-        try:
-            client = get_akshare_client()
-            cls_df = client.call(ak.stock_news_cls, symbol=symbol, ttl=1800)
-            if cls_df is not None and not cls_df.empty:
-                # 尝试常见的列名
-                content_col = None
-                for col in ["content", "title", "新闻内容", "标题"]:
-                    if col in cls_df.columns:
-                        content_col = col
-                        break
-                if content_col:
-                    news_list = list(dict.fromkeys(cls_df[content_col].dropna().astype(str).tolist()))
-                    if news_list:
-                        return "\n".join(news_list[0:limit])
-                # 如果找不到特有列，直接返回 raw dataframe text
-                return cls_df.head(limit).to_string(index=False)
-        except Exception as e:
-            logger.warning(f"财联社新闻接口失败，尝试东财接口: {e}")
+        # 1. 尝试东方财富个股新闻（若未处于熔断冷却期）
+        if not client._is_source_open("eastmoney"):
+            try:
+                news_df = _stock_news_em(symbol, limit=max(20, int(limit)))
+                if news_df is not None and not news_df.empty:
+                    for v in news_df.to_dict(orient="records"):
+                        if isinstance(v, dict) and v.get("新闻内容"):
+                            date_prefix = f"[{v.get('date')}] " if v.get("date") else ""
+                            collected_news.append(f"{date_prefix}{v['新闻内容']}")
+            except Exception as em_err:
+                client._record_source_failure("eastmoney", em_err)
+                logger.warning(f"东财新闻接口失败，切换至巨潮公告/财联社备用源: {em_err}")
 
-        # 尝试东财接口
-        news_df = _stock_news_em(symbol, limit=20)
+        # 2. 如果数量不足，补充巨潮资讯官方公告 (CNInfo)
+        if len(collected_news) < limit and symbol.isdigit() and len(symbol) == 6:
+            try:
+                end_dt = datetime.now()
+                start_dt = end_dt - timedelta(days=180)
+                cninfo_df = client.call(
+                    ak.stock_zh_a_disclosure_report_cninfo,
+                    symbol=symbol,
+                    start_date=start_dt.strftime("%Y%m%d"),
+                    end_date=end_dt.strftime("%Y%m%d"),
+                    ttl=3600,
+                    enable_range_completion=False,
+                )
+                if cninfo_df is not None and not cninfo_df.empty:
+                    for _, row in cninfo_df.head(int(limit)).iterrows():
+                        title = str(row.get("公告标题", "")).strip()
+                        pub_date = str(row.get("公告时间", "")).strip()
+                        if title:
+                            collected_news.append(f"[{pub_date} 公告] {title}")
+            except Exception as cn_err:
+                logger.warning(f"巨潮公告备用接口失败: {cn_err}")
 
-        if news_df is None or news_df.empty:
-            logger.warning(f"未找到 {symbol} 的新闻")
-            return f"Not Found for {symbol}"
+        # 3. 尝试从财联社全球电报中检索关联快讯
+        if len(collected_news) < limit:
+            try:
+                cls_df = client.call(
+                    ak.stock_info_global_cls, symbol="全部", ttl=600, use_disk_cache=False
+                )
+                if cls_df is not None and not cls_df.empty:
+                    text_cols = [c for c in ("内容", "标题", "content", "title") if c in cls_df.columns]
+                    if text_cols:
+                        col = text_cols[0]
+                        matched = cls_df[cls_df[col].astype(str).str.contains(symbol, na=False)]
+                        for item in matched[col].head(int(limit)).tolist():
+                            collected_news.append(str(item).strip())
+            except Exception as cls_err:
+                logger.debug(f"财联社电报检索失败: {cls_err}")
 
-        # 提取新闻内容并去重
-        news_list = list(
-            dict.fromkeys(
-                [
-                    v["新闻内容"]
-                    for v in news_df.to_dict(orient="records")
-                    if isinstance(v, dict) and "新闻内容" in v
-                ]
-            )
-        )
-
-        if not news_list:
+        deduped = list(dict.fromkeys(n for n in collected_news if n))
+        if not deduped:
             logger.warning(f"未找到 {symbol} 的有效新闻内容")
             return f"Not Found for {symbol}"
 
-        # 返回指定数量的新闻
-        return "\n".join(news_list[0:limit])
+        return "\n".join(deduped[: int(limit)])
 
     except ValidationException as e:
         logger.error(f"参数验证失败: {e}")
@@ -116,6 +134,7 @@ def stock_news_global() -> str:
 
     此函数从多个来源获取全球财经新闻：
     - 新浪全球财经快讯
+    - 财联社 7x24 全球电报
     - NewsNow 财经频道（如果配置）
 
     Returns:
@@ -125,23 +144,37 @@ def stock_news_global() -> str:
         logger.info("获取全球财经快讯")
 
         news_lines: List[str] = []
+        client = get_akshare_client()
 
-        # 尝试从新浪获取全球财经快讯
+        # 1. 尝试从新浪获取全球财经快讯
         try:
-            client = get_akshare_client()
-            sina_df = client.call(ak.stock_info_global_sina, ttl=600)  # 10 分钟缓存
+            sina_df = client.call(ak.stock_info_global_sina, ttl=300, use_disk_cache=False)
 
             if sina_df is not None and not sina_df.empty:
-                # 转换为 CSV 格式并清理
                 csv_str = sina_df.to_csv(index=False, float_format="%.2f").strip()
-                # 移除今天的日期前缀以简化输出
                 csv_str = csv_str.replace(datetime.now().strftime("%Y-%m-%d "), "")
                 news_lines.extend(csv_str.split("\n"))
                 logger.debug(f"从新浪获取了 {len(news_lines)} 条新闻")
         except Exception as e:
             logger.warning(f"从新浪获取全球财经快讯失败: {e}")
 
-        # 尝试从 NewsNow 获取新闻
+        # 2. 尝试从财联社获取电报快讯
+        try:
+            cls_df = client.call(
+                ak.stock_info_global_cls, symbol="全部", ttl=300, use_disk_cache=False
+            )
+            if cls_df is not None and not cls_df.empty:
+                for _, row in cls_df.head(20).iterrows():
+                    title = str(row.get("标题", "") or "").strip()
+                    content = str(row.get("内容", "") or "").strip()
+                    pub_time = str(row.get("发布时间", "") or "").strip()
+                    text = content or title
+                    if text:
+                        news_lines.append(f"{pub_time},{text}" if pub_time else text)
+        except Exception as e:
+            logger.warning(f"从财联社获取快讯失败: {e}")
+
+        # 3. 尝试从 NewsNow 获取新闻
         try:
             newsnow_items = _newsnow_news()
             if newsnow_items:
@@ -165,37 +198,22 @@ def stock_news_global() -> str:
 
 
 def _stock_news_em(symbol: str, limit: int = 20) -> Optional[pd.DataFrame]:
-    """从东方财富获取股票新闻。
-
-    此函数通过东方财富的搜索 API 获取指定股票的相关新闻。
-
-    Args:
-        symbol: 股票代码
-        limit: 返回的新闻数量
-
-    Returns:
-        pd.DataFrame: 包含新闻数据的 DataFrame，或 None
-
-    Raises:
-        APIException: 当 API 调用失败时
-    """
+    """从东方财富获取股票新闻（使用连接池与动态 callback）。"""
     try:
-        # 构建缓存键
         cache_key = f"stock_news_em-{symbol}-{limit}"
 
-        # 尝试从缓存获取
         from ..cache import CacheKey
 
-        cache = CacheKey.init(cache_key, ttl=3600)
-        cached_data = cache.get()
+        cache = CacheKey.init(cache_key, ttl=1800, symbol=symbol, data_type="info")
+        cached_data = cache.cache1.get(cache_key)
 
         if cached_data is not None:
             logger.debug(f"新闻缓存命中: {cache_key}")
             return cached_data
 
-        # 构建请求参数
-        cbk = "jQuery351013927587392975826_1763361926020"
-        url = "http://search-api-web.eastmoney.com/search/jsonp"
+        rand_digits = "".join(str(random.randint(0, 9)) for _ in range(20))
+        cbk = f"jQuery3510{rand_digits}_{int(time.time() * 1000)}"
+        url = "https://search-api-web.eastmoney.com/search/jsonp"
 
         headers = {
             "User-Agent": USER_AGENT,
@@ -217,7 +235,7 @@ def _stock_news_em(symbol: str, limit: int = 20) -> Optional[pd.DataFrame]:
                             "searchScope": "default",
                             "sort": "default",
                             "pageIndex": 1,
-                            "pageSize": 10,
+                            "pageSize": min(max(limit, 10), 50),
                             "preTag": "<em>",
                             "postTag": "</em>",
                         }
@@ -227,39 +245,32 @@ def _stock_news_em(symbol: str, limit: int = 20) -> Optional[pd.DataFrame]:
             ),
         }
 
-        # 发起请求
         logger.debug(f"请求东方财富新闻 API: symbol={symbol}")
-        response = requests.get(url, headers=headers, params=params, timeout=20)
+        session = AkShareClient.get_http_session()
+        response = session.get(url, headers=headers, params=params, timeout=8)
         response.raise_for_status()
 
-        # 解析响应
         text = response.text.replace(cbk, "").strip().strip("()")
         data = json.loads(text) or {}
 
-        # 提取新闻数据
         articles = data.get("result", {}).get("cmsArticleWebOld") or []
 
         if not articles:
             logger.warning(f"东方财富未返回 {symbol} 的新闻数据")
             return None
 
-        # 转换为 DataFrame
         df = pd.DataFrame(articles)
 
-        # 按日期排序
         if "date" in df.columns:
             df.sort_values("date", ascending=False, inplace=True)
 
-        # 限制数量
         df = df.head(limit)
 
-        # 清理新闻内容（移除 HTML 标签）
         if "content" in df.columns:
             df["新闻内容"] = df["content"].str.replace(r"</?em>", "", regex=True)
 
-        # 存入缓存
-        cache.set(df)
-        logger.debug(f"新闻数据已缓存: {cache_key}")
+        cache.cache1[cache_key] = df
+        logger.debug(f"新闻数据已缓存（内存）: {cache_key}")
 
         return df
 
